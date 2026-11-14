@@ -52,6 +52,7 @@ def test_production_does_not_serve_the_api_schema():
         "APP_SECRET_KEY": "c" * 64,
         "COOKIE_SECURE": "1",
         "ALLOWED_HOSTS": "sentriq.example.com",
+        "TRUSTED_PROXIES": "172.18.0.1/32",
         "PASSWORD_ITERATIONS": "1000",
     }
     code = (

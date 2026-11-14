@@ -34,6 +34,7 @@ def run_config(**overrides):
         "APP_SECRET_KEY": "",
         "COOKIE_SECURE": "1",
         "ALLOWED_HOSTS": "sentriq.example.com",
+        "TRUSTED_PROXIES": "172.18.0.1/32",
         "WEB_CONCURRENCY": "1",
         "REDIS_URL": "",
         "PASSWORD_ITERATIONS": "1000",
@@ -69,6 +70,14 @@ def test_production_requires_redis_before_running_several_workers():
     result = run_config(APP_SECRET_KEY="a" * 64, WEB_CONCURRENCY=4, REDIS_URL="")
     assert result.returncode != 0
     assert "REDIS_URL" in result.stderr
+
+
+def test_production_requires_trusted_proxies():
+    """A missing value makes every client look like the proxy; a wide range lets
+    any container claim any address."""
+    result = run_config(APP_SECRET_KEY="a" * 64, TRUSTED_PROXIES="")
+    assert result.returncode != 0
+    assert "TRUSTED_PROXIES" in result.stderr
 
 
 def test_production_requires_secure_cookies():

@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -101,6 +102,46 @@ def export(
 
     logger.info("Exported %s audit records to %s (head %s)", len(rows), path.name, previous[:16])
     return {"path": str(path), "manifest": str(manifest_path), "records": len(rows), "head": previous}
+
+
+def push(result: dict, destination: str | Path) -> dict:
+    """Copy an export and its manifest off this host, then verify the copy.
+
+    The point of the anchor is that it lives somewhere the database cannot
+    reach: a share the app can write but not rewrite, an SFTP drop, object
+    storage with a retention lock. The copy is verified from the destination,
+    not from the source, because a truncated rsync that nobody checked is the
+    usual way an "exported" trail turns out to be unreadable.
+    """
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    source = Path(result["path"])
+    manifest = Path(result["manifest"])
+
+    for path in (source, manifest):
+        target = destination / path.name
+        shutil.copy2(path, target)
+        os.chmod(target, 0o444)
+
+    copied = destination / source.name
+    check = verify(copied)
+    if not check["ok"]:
+        raise RuntimeError(f"Off-host copy failed verification: {check.get('reason')}")
+
+    # A one-line anchor next to the export: the hash to quote in a change ticket
+    # without opening a 200 MB file.
+    (destination / f"{source.name}.head").write_text(
+        f"{check['head']}  {source.name}  records={check['records']}  "
+        f"pushed={datetime.now(timezone.utc).isoformat()}\n",
+        encoding="utf-8",
+    )
+    logger.info("Pushed %s to %s (head %s)", source.name, destination, check["head"][:16])
+    return {
+        "directory": str(destination),
+        "file": str(copied),
+        "records": check["records"],
+        "head": check["head"],
+    }
 
 
 def verify(path: str | Path) -> dict:

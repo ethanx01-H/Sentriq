@@ -8,9 +8,10 @@ from datetime import datetime
 from sqlalchemy import select
 
 from .auth import hash_password, validate_password_strength
-from .config import APP_ENV, RETENTION_DAYS
-from .models import Alert, AlertEvent, SessionLocal, User
+from .config import APP_ENV, AUDIT_OFFHOST_DIR, RETENTION_DAYS
+from .models import Alert, AlertEvent, Evidence, SessionLocal, User, engine
 from .services import audit_export as audit_export_service
+from .services import audit_guard as audit_guard_service
 from .services import backup_status as backup_status_service
 from .services import retention_service, sla_service
 from .services.alert_service import create_alert
@@ -114,7 +115,7 @@ def run_retention(days: int, apply: bool) -> None:
         print("Dry run: nothing was written or deleted. Re-run with --apply to archive and remove.")
 
 
-def run_audit_export(start: str | None, end: str | None, out: str | None) -> None:
+def run_audit_export(start: str | None, end: str | None, out: str | None, push: bool = False, to_dir: str | None = None) -> None:
     from pathlib import Path
 
     window = {
@@ -128,7 +129,37 @@ def run_audit_export(start: str | None, end: str | None, out: str | None) -> Non
     print(f"Wrote {result['records']} audit records to {result['path']}")
     print(f"Manifest: {result['manifest']}")
     print(f"Head hash: {result['head']}")
-    print("Record the head hash somewhere outside this host; it is what proves the export later.")
+    if push:
+        destination = to_dir or (str(AUDIT_OFFHOST_DIR) if AUDIT_OFFHOST_DIR else "")
+        if not destination:
+            raise SystemExit(
+                "Nothing to push to: set AUDIT_OFFHOST_DIR or pass --to-dir. "
+                "The anchor has to live somewhere this host cannot rewrite."
+            )
+        copied = audit_export_service.push(result, destination)
+        print(f"Copied to {copied['file']} (verified from the destination)")
+        print(f"Anchor: {copied['directory']}/{Path(copied['file']).name}.head")
+    else:
+        print("Record the head hash somewhere outside this host; it is what proves the export later.")
+
+
+def run_audit_guard(install: bool, app_role: str | None) -> None:
+    """Check, install, or tighten the append-only protection on the audit trail."""
+    if install:
+        audit_guard_service.install(engine)
+        print("Append-only trigger installed (or already present).")
+    if app_role:
+        audit_guard_service.revoke_write_privileges(engine, app_role)
+        print(f"Revoked UPDATE, DELETE and TRUNCATE on fastapi_audit_logs from {app_role}.")
+    report = audit_guard_service.report(engine)
+    print(json.dumps(report, indent=2))
+    notes = audit_guard_service.advisory(report)
+    if notes:
+        print("")
+        for note in notes:
+            print(f"NOTE: {note}")
+    else:
+        print("\nThe trail is append-only and the application role cannot lift it.")
 
 
 def run_audit_verify(path: str) -> None:
@@ -147,6 +178,38 @@ def run_backup_status() -> None:
     print(json.dumps(backup_status_service.status(), indent=2))
 
 
+def run_encrypt_evidence(apply: bool) -> None:
+    """Encrypt evidence files that were written before a key was configured."""
+    from .config import UPLOAD_DIR
+    from .services.evidence_security import MAGIC, encryption_enabled, seal
+
+    if not encryption_enabled():
+        raise SystemExit(
+            "EVIDENCE_ENCRYPTION_KEY is not set. Generate one with: "
+            "openssl rand -hex 32, then add it to the environment."
+        )
+
+    converted = already = missing = 0
+    with SessionLocal() as db:
+        for evidence in db.scalars(select(Evidence)):
+            path = UPLOAD_DIR / evidence.stored_name
+            if not path.exists():
+                missing += 1
+                continue
+            with path.open("rb") as handle:
+                if handle.read(len(MAGIC)) == MAGIC:
+                    already += 1
+                    continue
+            if apply:
+                path.write_bytes(seal(path.read_bytes(), evidence.stored_name))
+            converted += 1
+
+    verb = "Encrypted" if apply else "Would encrypt"
+    print(f"{verb} {converted} file(s); {already} already encrypted; {missing} missing from disk.")
+    if not apply and converted:
+        print("Dry run: nothing was written. Re-run with --apply.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -162,12 +225,24 @@ def main() -> None:
     export.add_argument("--from", dest="start", default=None, help="Start timestamp (ISO 8601, UTC)")
     export.add_argument("--to", dest="end", default=None, help="End timestamp (ISO 8601, UTC)")
     export.add_argument("--out", default=None, help="Directory for the export")
+    export.add_argument("--push", action="store_true",
+                        help="Copy the export and its manifest off-host after verifying the copy")
+    export.add_argument("--to-dir", default=None,
+                        help="Destination for --push (default: AUDIT_OFFHOST_DIR)")
 
     verify = commands.add_parser("audit-verify", help="Verify an audit export against its manifest")
     verify.add_argument("path")
 
+    guard = commands.add_parser("audit-guard", help="Check or install append-only protection on the audit trail")
+    guard.add_argument("--install", action="store_true", help="Create the trigger if it is missing")
+    guard.add_argument("--app-role", default=None,
+                       help="Revoke UPDATE, DELETE and TRUNCATE from this role (run as the table owner)")
+
     commands.add_parser("sla-sweep", help="Record newly missed SLAs and close resolved breaches")
     commands.add_parser("backup-status", help="Report the newest data snapshot and its age")
+
+    encrypt = commands.add_parser("encrypt-evidence", help="Encrypt evidence files written before a key was set")
+    encrypt.add_argument("--apply", action="store_true", help="Write the changes (default is a dry run)")
 
     args = parser.parse_args()
     if args.command == "create-admin":
@@ -177,13 +252,17 @@ def main() -> None:
     elif args.command == "retention":
         run_retention(args.days, args.apply)
     elif args.command == "audit-export":
-        run_audit_export(args.start, args.end, args.out)
+        run_audit_export(args.start, args.end, args.out, args.push, args.to_dir)
     elif args.command == "audit-verify":
         run_audit_verify(args.path)
+    elif args.command == "audit-guard":
+        run_audit_guard(args.install, args.app_role)
     elif args.command == "sla-sweep":
         run_sla_sweep()
     elif args.command == "backup-status":
         run_backup_status()
+    elif args.command == "encrypt-evidence":
+        run_encrypt_evidence(args.apply)
 
 
 if __name__ == "__main__":

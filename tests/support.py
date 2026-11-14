@@ -38,6 +38,7 @@ os.environ["DATABASE_URL"] = _BASE_URI
 
 from sentriq.dburl import normalise_database_url  # noqa: E402
 from sentriq.models import Base  # noqa: E402
+from sentriq.services import audit_guard  # noqa: E402
 
 TEMPLATE = "soc_test_template"
 
@@ -67,6 +68,9 @@ def ensure_template() -> None:
 
     engine = create_engine(url_for(TEMPLATE))
     Base.metadata.create_all(bind=engine)
+    # The same append-only guard the migration installs, so the suite exercises
+    # the trigger production runs instead of a schema that only looks the same.
+    audit_guard.install(engine)
     engine.dispose()
     admin.dispose()
 

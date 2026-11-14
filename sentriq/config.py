@@ -6,6 +6,8 @@ placeholder secret. Local development is the explicit exception, selected by
 setting ``APP_ENV`` to something other than ``production``.
 """
 
+import base64
+import binascii
 import os
 import secrets
 from pathlib import Path
@@ -108,14 +110,53 @@ RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
 RATE_LIMIT_EXEMPT_PATHS = ("/healthz", "/metrics")
 RATE_LIMIT_EXEMPT_PREFIXES = ("/static/",)
 # Only these peers may speak for the client through X-Forwarded-For / X-Real-IP.
+# In production this is the single address your reverse proxy connects from, not
+# a range: anything on the list can claim any client address, which is how the
+# per-IP limits and the audit source IP are keyed.
+_trusted_proxies_raw = (os.environ.get("TRUSTED_PROXIES") or "").strip()
 TRUSTED_PROXIES = tuple(
-    entry.strip()
-    for entry in os.environ.get("TRUSTED_PROXIES", "127.0.0.1/32,::1/128").split(",")
-    if entry.strip()
+    entry.strip() for entry in _trusted_proxies_raw.split(",") if entry.strip()
 )
+if not TRUSTED_PROXIES:
+    if APP_ENV == "production":
+        raise RuntimeError(
+            "TRUSTED_PROXIES is required in production: set it to the address your "
+            "reverse proxy connects from, e.g. TRUSTED_PROXIES=172.18.0.1/32 (find it "
+            "with: docker network inspect sentriq_default -f "
+            "'{{ (index .IPAM.Config 0).Gateway }}'). Without it every request looks "
+            "like it came from the proxy, so per-client rate limits and the audit "
+            "source IP are wrong; with a wide range, any container on that range can "
+            "claim any address."
+        )
+    TRUSTED_PROXIES = ("127.0.0.1/32", "::1/128")
 MAX_REQUEST_BYTES = int(os.environ.get("MAX_REQUEST_BYTES", str(25 * 1024 * 1024)))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(6 * 1024 * 1024)))
 ALLOWED_EVIDENCE_EXTENSIONS = {".xlsx", ".csv", ".jpg", ".jpeg", ".png", ".txt", ".log", ".json", ".pdf", ".pcap", ".pcapng"}
+
+# Evidence handling. A scanner command is optional (ClamAV by convention, with {}
+# standing for the temporary file). With REQUIRED set, a scanner that cannot run
+# blocks the upload instead of letting an unscanned file through.
+EVIDENCE_SCAN_COMMAND = (os.environ.get("EVIDENCE_SCAN_COMMAND") or "").strip() or None
+EVIDENCE_SCAN_REQUIRED = os.environ.get("EVIDENCE_SCAN_REQUIRED", "0") == "1"
+EVIDENCE_SCAN_TIMEOUT = int(os.environ.get("EVIDENCE_SCAN_TIMEOUT", "60"))
+
+# AES-256-GCM key for evidence at rest, as 64 hex characters or base64. This
+# protects a stolen backup or data directory; it does not protect a compromised
+# host, where the key is in the process environment.
+EVIDENCE_ENCRYPTION_KEY = (os.environ.get("EVIDENCE_ENCRYPTION_KEY") or "").strip() or None
+if EVIDENCE_ENCRYPTION_KEY:
+    try:
+        _evidence_key = (
+            bytes.fromhex(EVIDENCE_ENCRYPTION_KEY)
+            if len(EVIDENCE_ENCRYPTION_KEY) == 64
+            else base64.b64decode(EVIDENCE_ENCRYPTION_KEY, validate=True)
+        )
+    except (binascii.Error, ValueError) as error:
+        raise RuntimeError(
+            "EVIDENCE_ENCRYPTION_KEY must be 32 bytes as 64 hex characters or base64."
+        ) from error
+    if len(_evidence_key) != 32:
+        raise RuntimeError("EVIDENCE_ENCRYPTION_KEY must decode to exactly 32 bytes (AES-256).")
 
 STATUSES = ["Open", "Pending", "WIP", "Closed"]
 SEVERITIES = ["Critical", "High", "Medium", "Low", "Informational"]
@@ -129,7 +170,7 @@ SEVERITY_LABELS = {
 ROLES = ["L1", "L2", "L3"]
 # Timestamps are stored in UTC and rendered in this zone for analysts.
 DISPLAY_TIMEZONE = os.environ.get("DISPLAY_TIMEZONE", "Asia/Yangon")
-ALEMBIC_HEAD = "0010_session_epoch"
+ALEMBIC_HEAD = "0011_audit_append_only"
 
 LOGIN_LOCKOUT_THRESHOLD = int(os.environ.get("LOGIN_LOCKOUT_THRESHOLD", "5"))
 LOGIN_ACCOUNT_LOCKOUT_THRESHOLD = int(os.environ.get("LOGIN_ACCOUNT_LOCKOUT_THRESHOLD", "10"))
@@ -158,6 +199,9 @@ if APP_ENV == "production" and WEB_CONCURRENCY > 1 and not REDIS_URL:
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "730"))
 ARCHIVE_DIR = Path(os.environ.get("ARCHIVE_DIR", str(DATA_DIR / "archive")))
 AUDIT_EXPORT_DIR = Path(os.environ.get("AUDIT_EXPORT_DIR", str(DATA_DIR / "audit-exports")))
+# Where a scheduled export is copied so the anchor is not on the same host as the
+# database it describes: a mounted share, an SFTP drop, object storage.
+AUDIT_OFFHOST_DIR = Path(os.environ["AUDIT_OFFHOST_DIR"]) if os.environ.get("AUDIT_OFFHOST_DIR") else None
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", str(BASE_DIR / "backups")))
 # A snapshot older than this makes /healthz report degraded.
 BACKUP_MAX_AGE_HOURS = int(os.environ.get("BACKUP_MAX_AGE_HOURS", "36"))
