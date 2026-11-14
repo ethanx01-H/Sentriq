@@ -99,6 +99,21 @@ def test_an_active_session_still_ends_at_the_absolute_deadline(client, sessions)
     assert client.get("/alerts/").status_code == 303
 
 
+def test_activity_slides_the_idle_window(client, sessions):
+    """Otherwise every session would die 30 minutes after sign-in, active or not."""
+    client.cookies.set("session", cookie_for(sessions, "l1", seen_offset=-120))
+    response = client.get("/alerts/")
+    assert response.status_code == 200
+
+    reissued = [value for value in response.headers.get_list("set-cookie")
+                if value.startswith("session=")]
+    assert reissued, "the idle clock was not refreshed"
+    refreshed = signer.loads(reissued[0].split(";", 1)[0].split("=", 1)[1])
+    assert refreshed["seen"] >= int(time.time()) - 60
+    # The absolute deadline is anchored at sign-in and must not move with it.
+    assert refreshed["iat"] <= int(time.time())
+
+
 def test_a_cookie_from_before_a_revocation_is_refused(client, sessions):
     client.cookies.set("session", cookie_for(sessions, "l1"))
     assert client.get("/alerts/").status_code == 200
