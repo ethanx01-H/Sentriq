@@ -31,9 +31,26 @@ def test_every_copy_source_in_the_dockerfile_exists():
             assert (ROOT / source).exists(), f"Dockerfile copies a missing path: {source}"
 
 
-def test_the_entrypoint_is_executable_and_parses():
-    mode = ENTRYPOINT.stat().st_mode
-    assert mode & stat.S_IXUSR, "docker-entrypoint.sh is not executable"
+SHELL_SCRIPTS = sorted(
+    [ENTRYPOINT] + list((ROOT / "scripts").glob("*.sh")),
+    key=lambda path: path.name,
+)
+
+
+@pytest.mark.parametrize("script", SHELL_SCRIPTS, ids=lambda path: path.name)
+def test_every_shell_script_is_executable_in_the_commit(script):
+    """The exec bit has to be in git, not just on the author's disk.
+
+    WSL on a Windows drive reports 0777 for every file, so `git add` records
+    0644 and a fresh clone — which is what CI and the image get — has scripts
+    nobody can run. The Dockerfile chmods the entrypoint, which hid this until
+    CI checked out the repository.
+    """
+    assert script.stat().st_mode & stat.S_IXUSR, f"{script.name} is not executable"
+    assert script.read_text().startswith("#!/bin/sh")
+
+
+def test_the_entrypoint_parses():
     assert ENTRYPOINT.read_text().startswith("#!/bin/sh")
 
 
