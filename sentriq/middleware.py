@@ -113,14 +113,18 @@ async def security_middleware(request: Request, call_next):
     if refresh:
         set_session_cookie(response, refresh)
 
-    # Security headers
+    # Security headers. A route may set its own Content-Security-Policy (evidence
+    # downloads answer with "sandbox"), so this is a default, not an override.
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["X-XSS-Protection"] = "0"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:"
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; "
+        "img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; "
+        "form-action 'self'",
     )
     if COOKIE_SECURE:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"

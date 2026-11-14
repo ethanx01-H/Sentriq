@@ -10,7 +10,6 @@ when" — and it cannot be answered from a mutable row that only records uploads
 """
 
 import logging
-import mimetypes
 import re
 from pathlib import Path
 from urllib.parse import quote
@@ -22,6 +21,7 @@ from ..auth import UserDep
 from ..config import UPLOAD_DIR
 from ..dependencies import get_db
 from ..models import Alert, Evidence
+from ..services.evidence_security import EvidenceError, derive_media_type, unseal, verify_digest
 from ..utils import audit
 
 logger = logging.getLogger("sentriq.evidence_routes")
@@ -60,6 +60,38 @@ def _record_read(db: Session, user, evidence: Evidence, action: str, request: Re
     db.commit()
 
 
+def _record_integrity_failure(db: Session, user, evidence: Evidence, request: Request, detail: str) -> None:
+    """A file that no longer matches its hash is an incident, not a 500."""
+    audit(
+        db, user, "evidence.integrity_failed",
+        f"Refused to serve {evidence.original_name} from alert #{evidence.alert_id}: {detail}. "
+        f"Recorded sha256 {evidence.sha256}.",
+        "evidence", str(evidence.id), request,
+    )
+    db.commit()
+    logger.error("Evidence integrity failure for id=%s (%s): %s", evidence.id, evidence.stored_name, detail)
+
+
+def _read_verified(db: Session, user, evidence: Evidence, request: Request) -> bytes:
+    """Read the file, decrypt it, and refuse anything that fails its own hash."""
+    raw = _stored_path(evidence).read_bytes()
+    try:
+        content = unseal(raw, evidence.stored_name)
+    except EvidenceError as error:
+        _record_integrity_failure(db, user, evidence, request, str(error))
+        raise HTTPException(status_code=409, detail=str(error))
+    if not verify_digest(content, evidence.sha256):
+        detail = "the file no longer hashes to the value recorded at upload"
+        _record_integrity_failure(db, user, evidence, request, detail)
+        raise HTTPException(
+            status_code=409,
+            detail="This evidence file does not match the hash recorded when it was "
+                   "uploaded, so it was not served. The mismatch has been written to "
+                   "the audit trail.",
+        )
+    return content
+
+
 @router.get("/evidence/{evidence_id}/")
 def evidence_download(evidence_id: int, request: Request, user: UserDep, db: Session = Depends(get_db)):
     evidence = db.get(Evidence, evidence_id)
@@ -67,12 +99,19 @@ def evidence_download(evidence_id: int, request: Request, user: UserDep, db: Ses
         raise HTTPException(status_code=404)
     if not db.get(Alert, evidence.alert_id):
         raise HTTPException(status_code=404)
-    content = _stored_path(evidence).read_bytes()
+    content = _read_verified(db, user, evidence, request)
     _record_read(db, user, evidence, "evidence.downloaded", request)
     return Response(
         content,
-        media_type=evidence.content_type,
-        headers={"Content-Disposition": content_disposition("attachment", evidence.original_name)},
+        # From the extension on disk, never from the type the uploader claimed.
+        media_type=derive_media_type(evidence.stored_name),
+        headers={
+            "Content-Disposition": content_disposition("attachment", evidence.original_name),
+            # Belt and braces for a file that is opened rather than saved: no
+            # scripts, no same-origin privileges, no MIME sniffing.
+            "Content-Security-Policy": "sandbox",
+            "X-Download-Options": "noopen",
+        },
     )
 
 
@@ -89,14 +128,14 @@ def evidence_preview(evidence_id: int, request: Request, user: UserDep, db: Sess
         raise HTTPException(status_code=404)
     if not evidence.is_image:
         raise HTTPException(status_code=404)
-    media_type = mimetypes.guess_type(f"preview{Path(evidence.stored_name).suffix}")[0]
-    content = _stored_path(evidence).read_bytes()
+    content = _read_verified(db, user, evidence, request)
     _record_read(db, user, evidence, "evidence.previewed", request)
     return Response(
         content,
-        media_type=media_type or "application/octet-stream",
+        media_type=derive_media_type(evidence.stored_name),
         headers={
             "Content-Disposition": content_disposition("inline", evidence.original_name),
+            "Content-Security-Policy": "sandbox",
             "Cache-Control": "private, max-age=300",
         },
     )

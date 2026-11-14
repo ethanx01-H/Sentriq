@@ -16,14 +16,13 @@ from starlette.datastructures import UploadFile
 
 from ..config import ALLOWED_EVIDENCE_EXTENSIONS, MAX_UPLOAD_BYTES, UPLOAD_DIR
 from ..models import Alert, AlertEvent, Evidence, User
+from .evidence_security import EvidenceError, scan_bytes, seal
 
 logger = logging.getLogger("sentriq.evidence_service")
 
 CHUNK = 1024 * 1024
 
-
-class EvidenceError(Exception):
-    """Rejected upload. The message is safe to show to the analyst."""
+__all__ = ["EvidenceError", "read_upload", "secure_upload_name", "store_evidence"]
 
 
 def secure_upload_name(filename: str) -> str:
@@ -54,7 +53,11 @@ def read_upload(upload: UploadFile) -> tuple[str, bytes]:
             chunks.append(chunk)
     finally:
         upload.file.close()
-    return name, b"".join(chunks)
+    content = b"".join(chunks)
+    # Scan before the bytes are stored, so an infected file never lands on the
+    # evidence volume, not even for a moment.
+    scan_bytes(content, name)
+    return name, content
 
 
 def store_evidence(
@@ -70,7 +73,9 @@ def store_evidence(
     stored_name = f"{alert.alert_id}_{secrets.token_hex(8)}{extension}"
     path = UPLOAD_DIR / stored_name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
+    # Encrypted on the way to disk when a key is configured; the recorded hash is
+    # always of the plaintext, so it can be checked after decryption.
+    path.write_bytes(seal(content, stored_name))
 
     evidence = Evidence(
         alert=alert,

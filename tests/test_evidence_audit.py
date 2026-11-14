@@ -1,5 +1,7 @@
 """Evidence reads are audited, and the download header cannot be broken."""
 
+import hashlib
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -57,7 +59,11 @@ def seed_evidence(sessions, tmp_path, name="capture.txt", payload=b"packet captu
     (tmp_path / stored).write_bytes(payload)
     evidence = Evidence(
         alert=alert, original_name=name, stored_name=stored,
-        content_type="text/plain", size_bytes=len(payload), sha256="b" * 64,
+        content_type="text/plain", size_bytes=len(payload),
+        # The real digest: a download now refuses a file that does not match the
+        # hash recorded at upload, so a fixture with a made-up hash is a fixture
+        # for a tampered file.
+        sha256=hashlib.sha256(payload).hexdigest(),
     )
     db.add(evidence)
     db.commit()
