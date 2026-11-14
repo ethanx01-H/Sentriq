@@ -19,11 +19,9 @@ services:
       # that saw the failed attempt. Set REDIS_URL and --profile redis to scale.
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
       REDIS_URL: ${REDIS_URL:-}
-      # The host proxy reaches the container over the Docker bridge, so the
-      # container sees it as a private 172.x address. If your Docker network uses
-      # a different range, set TRUSTED_PROXIES explicitly — do not add ranges
-      # that can reach port 8080 directly, or clients can spoof their address.
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12}
+      # TRUSTED_PROXIES is deliberately not defaulted here. It must be the single
+      # address the host proxy connects from (the Docker bridge gateway), and the
+      # app refuses to start in production without it: see .env.example.
       DATA_DIR: /app/data
       BACKUP_DIR: /app/backups
     ports:

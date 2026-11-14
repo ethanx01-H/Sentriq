@@ -246,6 +246,44 @@ python -m sentriq.manage audit-verify data/audit-exports/audit-20260401T000000Z.
 
 Exports are written read-only with a manifest holding the head hash. Copy the head hash somewhere off this host (a change ticket, an external log): that anchor is what proves later that the export was not rewritten. Read-only is not immutable — for the bank's requirement, land the export in object-lock or WORM storage.
 
+**The trail is append-only.** A database trigger refuses `UPDATE`, `DELETE` and
+`TRUNCATE` on `fastapi_audit_logs` for every role, including the one the
+application connects as, so a bug or a careless psql session cannot rewrite
+history. Check what is actually in place:
+
+```bash
+python -m sentriq.manage audit-guard            # report only
+python -m sentriq.manage audit-guard --install  # create the trigger if missing
+```
+
+The report also says when the application's own role owns the table, because a
+trigger can be disabled by its owner. The durable form of this control is
+ownership plus privileges, and both are one command for a DBA:
+
+```sql
+ALTER TABLE fastapi_audit_logs OWNER TO <dba_role>;
+```
+```bash
+python -m sentriq.manage audit-guard --app-role <app_role>   # run as the owner
+```
+
+That leaves the application able to `INSERT` and `SELECT` only, which is what an
+append-only trail means. Neither layer survives a superuser, so the application
+must not connect as one — the report tells you if it does.
+
+**Scheduled off-host export.** `scripts/audit-export-offhost.sh` exports the
+window, copies the file and manifest to `AUDIT_OFFHOST_DIR`, verifies the copy
+from the destination, and writes a one-line `.head` anchor beside it. It exits
+non-zero when anything fails, so cron can alert on it.
+
+```cron
+15 1 * * * cd /path/to/Sentriq && docker compose exec -T sentriq sh scripts/audit-export-offhost.sh 1 >> /var/log/sentriq-audit-export.log 2>&1
+```
+
+`AUDIT_OFFHOST_DIR` must be somewhere this host cannot rewrite — a mounted share
+with append-only permissions, an SFTP drop, or object storage with a retention
+lock. A copy on the same disk is not an anchor.
+
 **Monitoring.** `/healthz` reports database health and the age of the newest snapshot, and answers `degraded` when the snapshot is older than `BACKUP_MAX_AGE_HOURS` (default 36) without failing the check — restarting the app would not fix a dead backup job. `/metrics` serves Prometheus text: request counts and latency, tickets by status and severity, unassigned backlog, SLA breaches, evidence volume, audit row count, backup age and staleness, and which limiter store is in use. Without `METRICS_TOKEN` it answers on loopback only; with a token it requires `Authorization: Bearer <token>`.
 
 ```bash
@@ -348,17 +386,32 @@ Create users, manage roles (L1/L2/L3), and reset passwords.
 
 ### Role-based access control
 
-| Capability         | L1 Analyst | L2 Analyst | L3 Admin |
-|--------------------|:----------:|:----------:|:--------:|
-| View alerts        | Yes        | Yes        | Yes      |
-| Create alerts      | Yes        | Yes        | Yes      |
-| Edit alerts        | Yes*       | Yes        | Yes      |
-| Escalate alerts    | Yes        | Yes        | Yes      |
-| Assign to analysts | No         | L1 only    | L1 + L2  |
-| Delete alerts      | No         | No         | Disabled |
-| Manage users       | No         | No         | Yes      |
+One matrix decides every action, in `sentriq/permissions.py`; the routes ask it
+rather than re-implementing the rule. "Own" means the ticket is assigned to that
+analyst.
 
-*L1 can edit assigned alerts while they remain open or in progress; closed tickets are read-only for L1.
+| Capability            | L1 Analyst   | L2 Analyst | L3 Admin |
+|-----------------------|:------------:|:----------:|:--------:|
+| View, create, take    | Yes          | Yes        | Yes      |
+| Edit a ticket         | Own only     | Any open   | Any open |
+| Close a ticket        | Own only     | Any open   | Any open |
+| Change status         | Own only     | Any open   | Any open |
+| Escalate              | Yes          | Yes        | No       |
+| Assign to analysts    | No           | L1 only    | L1 + L2  |
+| Merge duplicates      | No           | Yes        | Yes      |
+| Export the queue      | Yes (audited)| Yes (audited)| Yes (audited) |
+| Delete a ticket       | No           | No         | No       |
+| Manage users          | No           | No         | Yes      |
+| Read the audit trail  | No           | No         | Yes      |
+
+Closed tickets are read-only for everyone: they are the record, not the working
+set. An unassigned ticket is nobody's until someone takes it, which is what puts
+a name in the timeline — an L1 has to take a ticket before editing or closing it.
+Deleting a ticket is refused for every role, because it would take the timeline
+and the evidence with it.
+
+Every CSV export writes an audit row naming the analyst, the number of rows and
+the filter that produced them.
 
 ### Account lifecycle
 
@@ -381,6 +434,85 @@ out** button on the Users page does it to another account without changing its
 password — that is the control to reach for when a device is lost.
 
 Timestamps are stored in UTC and rendered in the configured zone (`DISPLAY_TIMEZONE`, default `Asia/Yangon`) with the zone labelled above the activity log and the audit table.
+
+### Evidence handling
+
+Evidence is the part of a ticket that ends up in front of an auditor, so it is
+treated as evidence rather than as a file:
+
+- **Integrity.** The SHA-256 recorded at upload is checked on every read. A file
+  that no longer matches is refused with 409 and the refusal is written to the
+  audit trail as `evidence.integrity_failed` — silent tampering is worse than a
+  visible failure.
+- **Type.** Downloads answer with the type derived from the extension on disk,
+  never the `Content-Type` the uploader claimed (that claim is still recorded, as
+  part of what was filed). Responses also carry `Content-Security-Policy:
+  sandbox`, `X-Download-Options: noopen` and `nosniff`.
+- **Malware.** Set `EVIDENCE_SCAN_COMMAND` (ClamAV by convention, `{}` is
+  replaced by the temporary file) and every upload is scanned before the bytes
+  are stored. `EVIDENCE_SCAN_REQUIRED=1` makes a scanner that cannot run block
+  the upload instead of letting an unscanned file through:
+
+  ```
+  EVIDENCE_SCAN_COMMAND=clamdscan --no-summary --stdout {}
+  EVIDENCE_SCAN_REQUIRED=1
+  ```
+
+- **At rest.** Set `EVIDENCE_ENCRYPTION_KEY` (32 bytes, hex or base64) and files
+  are written as AES-256-GCM, bound to their stored name so one file cannot be
+  swapped for another. Files written before the key existed still open; encrypt
+  them in place with:
+
+  ```bash
+  python -m sentriq.manage encrypt-evidence           # dry run
+  python -m sentriq.manage encrypt-evidence --apply
+  ```
+
+  Be clear about what this buys: it protects a stolen backup, a copied data
+  directory or a decommissioned disk. It does not protect a compromised host,
+  where the key is in the process environment. Full-disk encryption (LUKS,
+  BitLocker) and a key held in a KMS cover the rest.
+
+### Hardening and operations
+
+**CI** (`.github/workflows/ci.yml`) runs on every push: the test suite against
+Postgres, `pip-audit` over `requirements.txt`, a compose-file resolution check,
+an image build, a Trivy scan of the image and of the repository configuration
+(HIGH/CRITICAL, unfixed excluded), and a smoke test that the built image can
+import the worker and the crypto library.
+
+**Image scan locally**, with the same two scans:
+
+```bash
+scripts/scan-image.sh sentriq:local
+```
+
+**Restore verification.** A backup nobody restored is a guess. This restores the
+newest snapshot into a throwaway database, compares the row count of every table
+against the live database, and drops the scratch database again. It is safe to
+run against production — nothing is written to the live database:
+
+```bash
+docker compose exec -T sentriq sh scripts/verify-restore.sh /app/backups
+```
+
+```cron
+30 3 * * 0 cd /path/to/Sentriq && docker compose exec -T sentriq sh scripts/verify-restore.sh /app/backups >> /var/log/sentriq-restore.log 2>&1
+```
+
+It exits non-zero when the snapshot does not restore, when a table is missing
+from the restored copy, or when a table is empty there but not in the live
+database. A restored copy can legitimately be a few rows behind; it can never be
+ahead.
+
+**Trusted proxy.** `TRUSTED_PROXIES` is required in production and must be the
+single address the proxy connects from, not a range: anything on that list may
+claim any client address, which is what the per-IP rate limits and the audit
+source IP are keyed on. Find the Docker bridge gateway with:
+
+```bash
+docker network inspect sentriq_default -f '{{ (index .IPAM.Config 0).Gateway }}'
+```
 
 ### Elastic JSON import
 
