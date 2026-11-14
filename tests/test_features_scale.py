@@ -1,4 +1,4 @@
-"""Dashboard ranges, bulk actions, duplicate merging, and notifications."""
+"""Dashboard ranges, duplicate merging, notifications, and the removed bulk bar."""
 
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -263,147 +263,29 @@ def test_search_by_analyst_ignores_timeline_text(client, sessions):
     assert "Unassigned ticket" not in page.text
 
 
-def test_bulk_returns_to_the_page_it_came_from(client, sessions):
+def test_bulk_actions_are_gone(client, sessions):
+    """Tickets are changed one at a time, on the ticket, where the timeline
+    records who did what and why. The queue toolbar that could mass-edit was
+    removed; this keeps it removed."""
     db = sessions()
     user = db.scalar(select(User).where(User.username == "l2"))
-    alert = seed_alert(db, user, "Return ticket")
+    alert = seed_alert(db, user, "No bulk ticket")
     db.close()
 
     token = sign_in(client)
     response = client.post("/alerts/bulk/", data={
         "csrf_token": token, "action": "status:WIP", "ids": [str(alert.id)],
-        "next": "/alerts/mine/?severity=High",
     })
-    assert response.status_code == 303
-    assert response.headers["location"] == "/alerts/mine/?severity=High"
+    assert response.status_code in (404, 405)
 
-
-def test_bulk_ignores_an_offsite_next(client, sessions):
-    db = sessions()
-    user = db.scalar(select(User).where(User.username == "l2"))
-    alert = seed_alert(db, user, "Offsite ticket")
-    db.close()
-
-    token = sign_in(client)
-    response = client.post("/alerts/bulk/", data={
-        "csrf_token": token, "action": "status:WIP", "ids": [str(alert.id)],
-        "next": "//evil.example/x",
-    })
-    assert response.headers["location"] == "/alerts/"
-
-
-def test_bulk_toolbar_reports_selection_state(client, sessions):
-    db = sessions()
-    user = db.scalar(select(User).where(User.username == "l2"))
-    seed_alert(db, user, "Toolbar ticket")
-    db.close()
-
-    sign_in(client)
-    page = client.get("/alerts/")
-    assert "data-bulk-all" in page.text
-    assert "data-bulk-count" in page.text
-    # Apply stays disabled until something is ticked.
-    assert "data-bulk-apply disabled" in page.text
-
-
-def test_dashboard_has_no_bulk_editing(client, sessions):
-    """Bulk editing belongs on the queue page, not the read-only dashboard."""
-    db = sessions()
-    user = db.scalar(select(User).where(User.username == "l2"))
-    seed_alert(db, user, "Dashboard ticket")
-    db.close()
-
-    sign_in(client)
-    for path in ("/", "/?range=all"):
+    for path in ("/alerts/", "/alerts/mine/", "/"):
         page = client.get(path)
-        assert "Dashboard ticket" in page.text
         assert "data-bulk-all" not in page.text
-        assert "row-check" not in page.text
+        assert "Apply to selected" not in page.text
         assert 'action="/alerts/bulk/"' not in page.text
 
-    # The fragment the dashboard swaps in must match the page it replaces.
-    fragment = client.get("/?range=all", headers={"X-Partial": "1"})
-    assert "row-check" not in fragment.text
-    assert "data-bulk-all" not in fragment.text
-
-
-def test_bulk_reports_a_status_that_is_already_set(client, sessions):
     db = sessions()
-    user = db.scalar(select(User).where(User.username == "l2"))
-    alert = seed_alert(db, user, "Already WIP", status="WIP")
-    db.close()
-
-    token = sign_in(client)
-    response = client.post("/alerts/bulk/", data={
-        "csrf_token": token, "action": "status:WIP", "ids": [str(alert.id)],
-    })
-    assert response.status_code == 303
-
-    follow_up = client.get("/alerts/")
-    assert "Updated 0 ticket(s)." in follow_up.text
-    assert "already WIP" in follow_up.text
-
-    db = sessions()
-    assert db.get(Alert, alert.id).status == "WIP"
-    assert db.scalar(select(AuditLog).where(AuditLog.action == "alert.bulk_update")) is None
-    db.close()
-
-
-def test_bulk_assign_to_me(client, sessions):
-    db = sessions()
-    user = db.scalar(select(User).where(User.username == "l2"))
-    first = seed_alert(db, user, "Bulk one")
-    second = seed_alert(db, user, "Bulk two")
-    ids = [str(first.id), str(second.id)]
-    db.close()
-
-    token = sign_in(client)
-    response = client.post("/alerts/bulk/", data={
-        "csrf_token": token, "action": "assign_me", "ids": ids,
-    })
-    assert response.status_code == 303
-
-    db = sessions()
-    for pk in (first.id, second.id):
-        alert = db.get(Alert, pk)
-        assert alert.analyst == "l2"
-        assert alert.status == "Pending"
-    audit_row = db.scalar(select(AuditLog).where(AuditLog.action == "alert.bulk_update"))
-    assert audit_row is not None
-    db.close()
-
-
-def test_bulk_status_change_skips_closed_tickets(client, sessions):
-    db = sessions()
-    user = db.scalar(select(User).where(User.username == "l2"))
-    open_alert = seed_alert(db, user, "Open one")
-    closed_alert = seed_alert(db, user, "Closed one", status="Closed")
-    db.close()
-
-    token = sign_in(client)
-    client.post("/alerts/bulk/", data={
-        "csrf_token": token, "action": "status:WIP",
-        "ids": [str(open_alert.id), str(closed_alert.id)],
-    })
-
-    db = sessions()
-    assert db.get(Alert, open_alert.id).status == "WIP"
-    assert db.get(Alert, closed_alert.id).status == "Closed"
-    db.close()
-
-
-def test_bulk_without_selection_changes_nothing(client, sessions):
-    db = sessions()
-    user = db.scalar(select(User).where(User.username == "l2"))
-    alert = seed_alert(db, user, "Untouched")
-    db.close()
-
-    token = sign_in(client)
-    response = client.post("/alerts/bulk/", data={"csrf_token": token, "action": "status:WIP"})
-    assert response.status_code == 303
-
-    db = sessions()
-    assert db.get(Alert, alert.id).status == "Open"
+    assert db.get(Alert, alert.id).status == "Open", "the ticket must not have moved"
     db.close()
 
 

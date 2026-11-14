@@ -303,40 +303,10 @@ p {
 
 .table-row {
   display: grid;
-  grid-template-columns: 24px 120px minmax(220px, 1fr) 100px 120px 120px 120px 120px;
-  /* no-bulk tables drop the checkbox column below */
+  grid-template-columns: 120px minmax(220px, 1fr) 100px 120px 120px 120px 120px;
   gap: 12px;
   align-items: center;
   padding: 12px;
-}
-
-.row-check {
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  accent-color: var(--primary);
-}
-
-.bulk-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.bulk-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-strong);
-  font-size: 0.9rem;
-}
-
-.bulk-toolbar label {
-  font-weight: 700;
 }
 
 .range-nav {
@@ -904,36 +874,6 @@ body.lightbox-open {
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-}
-
-.bulk-all {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.bulk-all input,
-.row-check {
-  cursor: pointer;
-}
-
-.bulk-toolbar button[type="submit"]:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.bulk-toolbar [data-bulk-count] {
-  min-width: 86px;
-  font-size: 0.82rem;
-  font-variant-numeric: tabular-nums;
-}
-
-/* The dashboard has no bulk toolbar, so its rows lose the checkbox track and
-   get the width back. */
-.table.no-bulk .table-row {
-  grid-template-columns: 120px minmax(220px, 1fr) 100px 120px 120px 120px 120px;
 }
 
 /* Calendar inputs sit in the same row as the other filters, so they stay

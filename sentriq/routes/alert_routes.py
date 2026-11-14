@@ -29,7 +29,7 @@ from ..services import merge_service, notify, sla_service
 from ..services.chart_service import chart_counts, chart_counts_for_query
 from ..services.evidence_service import EvidenceError, read_upload, store_evidence
 from ..config import PUBLIC_BASE_URL
-from ..utils import audit, is_local_path, is_partial_request, page_url, redirect_to, render
+from ..utils import audit, is_partial_request, page_url, redirect_to, render
 
 logger = logging.getLogger("sentriq.alert_routes")
 
@@ -59,9 +59,6 @@ def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depe
         "ranges": RANGE_CHOICES,
         # A calendar range replaces the preset window, so no pill stays lit.
         "active_range": "" if (request.query_params.get("from") or request.query_params.get("to")) else (request.query_params.get("range") or "all").lower(),
-        # The dashboard is for reading the queue; bulk editing belongs on the
-        # queue page where the rows are the working set.
-        "bulk_actions": False,
     }
     if is_partial_request(request):
         return render(request, "alerts/partials/dashboard_results.html", context, db, user)
@@ -512,93 +509,3 @@ def alert_merge(
         f"Merged {result['source']} into {result['target']}.",
     )
 
-
-@router.post("/alerts/bulk/")
-def alert_bulk(
-    request: Request,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_user),
-    ids: Annotated[list[str] | None, Form()] = None,
-    action: Annotated[str, Form()] = "",
-    return_to: Annotated[str, Form(alias="next")] = "",
-):
-    """Apply one action to several tickets at once.
-
-    Every ticket is checked individually: a bulk action must not quietly skip the
-    permission rules that a single-ticket action enforces.
-    """
-    # Send the analyst back where they were. Landing on the unfiltered queue after
-    # a bulk action made the change look like it had not happened.
-    back = return_to if is_local_path(return_to) else "/alerts/"
-    selected: list[int] = []
-    for raw in ids or []:
-        try:
-            selected.append(int(raw))
-        except (TypeError, ValueError):
-            continue
-    if not selected:
-        return redirect_to(back, "Select at least one ticket first.")
-
-    alerts = list(db.scalars(select(Alert).where(Alert.id.in_(selected))))
-    changed = 0
-    skipped = 0
-    # A ticket that is already in the requested state is not a failure, but it is
-    # also not a change: reporting "Updated 2 tickets" when nothing moved is what
-    # made the WIP action look broken.
-    unchanged = 0
-    already = ""
-    for alert in alerts:
-        if action == "assign_me":
-            if alert.status == "Closed" or not can(user, "alert.take", alert):
-                skipped += 1
-                continue
-            if alert.assigned_to_id == user.id and alert.analyst == user.username:
-                unchanged += 1
-                already = "assigned to you"
-                continue
-            alert.assigned_to = user
-            alert.assigned_by = user
-            alert.analyst = user.username
-            if alert.status == "Open":
-                alert.status = "Pending"
-            alert.updated_by = user
-            db.add(AlertEvent(
-                alert=alert, event_type="assigned", actor=user, assigned_to=user,
-                message=f"{user.username} assigned this ticket to themselves (bulk action).",
-            ))
-            changed += 1
-        elif action.startswith("status:"):
-            wanted = action.split(":", 1)[1]
-            if wanted not in {"Open", "WIP", "Pending"} or alert.status == "Closed" or not can(user, "alert.status", alert):
-                skipped += 1
-                continue
-            if alert.status == wanted:
-                unchanged += 1
-                already = f"already {wanted}"
-                continue
-            previous = alert.status
-            alert.status = wanted
-            alert.updated_by = user
-            db.add(AlertEvent(
-                alert=alert, event_type="status",
-                message=f"{user.username} changed status from {previous} to {wanted} (bulk action).",
-            ))
-            changed += 1
-        else:
-            skipped += 1
-
-    if changed:
-        audit(
-            db, user, "alert.bulk_update",
-            f"Bulk action '{action}' updated {changed} ticket(s)"
-            + (f", {unchanged} unchanged" if unchanged else "")
-            + (f", skipped {skipped}." if skipped else "."),
-            "alert_batch", str(changed), request,
-        )
-        db.commit()
-    message = f"Updated {changed} ticket(s)."
-    if unchanged:
-        message += f" {unchanged} {already or 'unchanged'} — nothing to do there."
-    if skipped:
-        message += f" {skipped} skipped (closed, or not permitted)."
-    return redirect_to(back, message)

@@ -149,25 +149,6 @@ def test_l1_cannot_assign_or_merge(client, sessions):
     assert client.post(f"/alerts/{own}/merge/", data={"csrf_token": token, "target_alert_id": "#2"}).status_code == 403
 
 
-# --------------------------------------------------------------- bulk actions
-
-def test_bulk_status_change_skips_tickets_the_analyst_does_not_own(client, sessions):
-    sign_in(client, "l1")
-    token = csrf(client, "/alerts/")
-    own = alert_id(sessions, "#1")
-    theirs = alert_id(sessions, "#2")
-    response = client.post("/alerts/bulk/", data={
-        "csrf_token": token, "action": "status:Pending", "ids": [str(own), str(theirs)],
-    })
-    assert response.status_code == 303
-    db = sessions()
-    try:
-        assert db.get(Alert, own).status == "Pending"
-        assert db.get(Alert, theirs).status == "WIP", "a bulk action must not bypass ownership"
-    finally:
-        db.close()
-
-
 # ------------------------------------------------------------ audited export
 
 def test_csv_export_is_written_to_the_audit_trail(client, sessions):

@@ -374,7 +374,7 @@ Create users, manage roles (L1/L2/L3), and reset passwords.
 - Optional IOCs when creating tickets; close summaries have no application-level word-count limit
 - Filter by severity, status, search terms; CSV export of filtered results
 - Dashboard date ranges (24 hours, 7, 30, 90 days, all time) applied to the counts, charts and queue
-- Bulk actions on the queue: assign selected tickets to yourself, or move them to WIP/Pending/Open
+- One ticket at a time: status changes, assignment and closing happen on the ticket itself, so every change carries a name and a reason in its timeline
 - Duplicate handling: tickets filed within 24 hours with the same title or asset are listed on the ticket, and L2/L3 can merge one into another — the timeline and evidence move to the surviving ticket, and the duplicate closes pointing at it
 - SLA breach history: a sweep records each missed due date and, on closure, how late the ticket actually was; the totals are exposed on `/metrics` and by `python -m sentriq.manage sla-sweep`
 - Search matches ticket number, title, description, asset, source, analyst and IOC, and filters apply in place without reloading the page or losing your scroll position
