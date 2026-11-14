@@ -20,8 +20,8 @@ fi
 alembic upgrade head
 exec gunicorn main:app \
   --bind 0.0.0.0:8080 \
-  --workers "${WEB_CONCURRENCY:-4}" \
-  --worker-class uvicorn.workers.UvicornWorker \
+  --workers "${WEB_CONCURRENCY:-1}" \
+  --worker-class sentriq.worker.UvicornWorker \
   --timeout 120 \
   --access-logfile - \
   --error-logfile -

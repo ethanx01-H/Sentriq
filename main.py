@@ -10,8 +10,17 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from sentriq.config import ALEMBIC_HEAD, BASE_DIR, DATABASE_URL, DB_POOL_SIZE, WEB_CONCURRENCY
+from sentriq.config import (
+    ALLOWED_HOSTS,
+    ALEMBIC_HEAD,
+    APP_ENV,
+    BASE_DIR,
+    DATABASE_URL,
+    DB_POOL_SIZE,
+    WEB_CONCURRENCY,
+)
 from sentriq.middleware import security_middleware
 from sentriq.models import Base, engine
 from sentriq.routes import auth_routes, alert_routes, admin_routes, evidence_routes, metrics_routes, elastic_routes
@@ -25,12 +34,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sentriq")
 
-# Create FastAPI app
-app = FastAPI(title="Sentriq")
+# Create FastAPI app. The interactive docs and the OpenAPI schema are a free map
+# of every route and parameter, so production does not serve them; development
+# keeps them because they are useful there.
+app = FastAPI(
+    title="Sentriq",
+    docs_url=None if APP_ENV == "production" else "/docs",
+    redoc_url=None if APP_ENV == "production" else "/redoc",
+    openapi_url=None if APP_ENV == "production" else "/openapi.json",
+)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 # Add security middleware
 app.middleware("http")(security_middleware)
+
+# Host allow-list, added last so it is the outermost layer: a request whose Host
+# header is not a configured name is refused before it reaches any route.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(ALLOWED_HOSTS))
 
 # Include routers
 app.include_router(auth_routes.router)
@@ -53,9 +73,10 @@ def healthz():
     payload = {
         "status": "ok",
         "database": "ok",
+        # Enough for an uptime check to notice a dead backup job, and no more:
+        # this endpoint is unauthenticated, so the snapshot's name and the number
+        # kept are not the operator's business to publish.
         "backup": {
-            "count": backup["count"],
-            "newest": backup["newest"],
             "age_hours": round((backup["age_seconds"] or 0) / 3600, 1),
             "stale": backup["stale"],
         },
@@ -96,6 +117,11 @@ def run_migrations() -> None:
     command.upgrade(config, "head")
 
 
+def _database_label() -> str:
+    """Host and database only: a URL without "@" would otherwise print whole."""
+    return DATABASE_URL.rsplit("@", 1)[-1] if "@" in DATABASE_URL else DATABASE_URL.split(":", 1)[0]
+
+
 @app.on_event("startup")
 def startup() -> None:
     """Initialize database in development only; deployment migrates before serving."""
@@ -104,11 +130,17 @@ def startup() -> None:
     # workers allow N times the per-client limit unless REDIS_URL is set.
     logger.info(
         "Postgres at %s, %s workers, pool %s.",
-        DATABASE_URL.rsplit("@", 1)[-1],
+        _database_label(),
         WEB_CONCURRENCY,
         DB_POOL_SIZE,
     )
-    if os.environ.get("APP_ENV", "development").lower() != "production":
+    logger.info("Accepting requests for: %s", ", ".join(ALLOWED_HOSTS))
+    if APP_ENV != "production":
+        logger.warning(
+            "APP_ENV=%s: the production guards are off. Set APP_ENV=production "
+            "for anything reachable from the office network.",
+            APP_ENV,
+        )
         run_migrations()
     backup_status.warn_if_stale()
     logger.info("Sentriq ready")

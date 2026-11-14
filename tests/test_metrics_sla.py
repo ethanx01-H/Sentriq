@@ -175,7 +175,10 @@ def test_healthz_reports_backup_freshness(sessions, tmp_path, monkeypatch):
     client = TestClient(app, client=("127.0.0.1", 50000))
     body = client.get("/healthz").json()
     assert body["database"] == "ok"
-    assert body["backup"]["count"] == 1
+    assert body["backup"]["stale"] is False
+    assert body["backup"]["age_hours"] == 0.0
+    # The snapshot's name and count are not published on an unauthenticated URL.
+    assert set(body["backup"]) == {"age_hours", "stale"}
     assert body["status"] in {"ok", "degraded"}
 
 
