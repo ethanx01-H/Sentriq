@@ -20,7 +20,7 @@ from .auth import (
     signer,
     user_role,
 )
-from .config import BASE_DIR, COOKIE_SECURE, DISPLAY_TIMEZONE, ROLES, SEVERITIES, SEVERITY_LABELS, STATUSES
+from .config import BASE_DIR, COOKIE_SECURE, DISPLAY_TIMEZONE, ROLES, SEVERITIES, SEVERITY_LABELS, STATUSES, cookie_name
 from .models import AuditLog, User
 from .net import client_ip
 from .services.alert_service import sla_status
@@ -34,7 +34,7 @@ DISPLAY_TZ = ZoneInfo(DISPLAY_TIMEZONE)
 def to_local(value, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     """Render a stored UTC timestamp in the team's timezone.
 
-    Timestamps are written to SQLite as naive UTC (``datetime.now(timezone.utc)``
+    Timestamps are written to Postgres as naive UTC (``datetime.now(timezone.utc)``
     into a DateTime column), so a naive value is treated as UTC before the
     conversion. Without this every timeline and audit row is off by the zone
     offset — 6h30m for Asia/Yangon.
@@ -65,25 +65,31 @@ templates.env.filters["localdt"] = to_local
 
 def csrf_token_for(request: Request) -> str:
     """Get or generate CSRF token."""
-    token = request.cookies.get("csrf_token")
+    token = request.cookies.get(cookie_name("csrf_token"))
     return token if token else secrets.token_urlsafe(32)
 
 
 def set_security_cookies(response: Response, request: Request, csrf_token: str | None = None) -> None:
     """Set CSRF and security cookies on response."""
     token = csrf_token or csrf_token_for(request)
-    response.set_cookie("csrf_token", token, httponly=True, secure=COOKIE_SECURE, samesite="lax")
+    response.set_cookie(
+        cookie_name("csrf_token"), token,
+        httponly=True, secure=COOKIE_SECURE, samesite="lax", path="/",
+    )
 
 
 def flash(response: Response, message: str) -> None:
     """Set flash message cookie."""
-    response.set_cookie("flash", signer.dumps(message), httponly=True, secure=COOKIE_SECURE, samesite="lax")
+    response.set_cookie(
+        cookie_name("flash"), signer.dumps(message),
+        httponly=True, secure=COOKIE_SECURE, samesite="lax", path="/",
+    )
 
 
 def base_context(request: Request, user: User | None, db: Session) -> dict:
     """Build base template context with common variables."""
     message = None
-    raw = request.cookies.get("flash")
+    raw = request.cookies.get(cookie_name("flash"))
     if raw:
         try:
             message = signer.loads(raw)
@@ -143,7 +149,7 @@ def render(request: Request, template: str, context: dict, db: Session, user: Us
     """Render template with base context and security cookies."""
     base = base_context(request, user, db)
     response = templates.TemplateResponse(request, template, {**base, **context})
-    response.delete_cookie("flash")
+    response.delete_cookie(cookie_name("flash"))
     set_security_cookies(response, request, base["csrf_token"])
     return response
 

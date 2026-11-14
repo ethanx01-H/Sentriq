@@ -84,6 +84,9 @@ def user_role_update(
         return redirect_to("/admin/users/", "You cannot demote your active admin account.")
     target.role = role
     target.is_admin = role == "L3"
+    # A privilege change ends the account's sessions: whatever is open in a
+    # browser re-authenticates against the new role.
+    target.session_epoch = int(target.session_epoch or 0) + 1
     audit(db, user, "user.role_updated", f"Updated {target.username} to {role}.", "user", target.id, request)
     db.commit()
     logger.info("User '%s' role updated to %s by %s", target.username, role, user.username)
@@ -108,6 +111,7 @@ def user_password_reset(
         return redirect_to("/admin/users/", password_error)
     target.password_hash = hash_password(password)
     target.must_change_password = True
+    target.session_epoch = int(target.session_epoch or 0) + 1
     audit(db, user, "user.password_reset", f"Reset password for {target.username}.", "user", target.id, request)
     db.commit()
     logger.info("Password reset for '%s' by %s", target.username, user.username)
@@ -139,6 +143,10 @@ def user_set_active(
         if not remaining:
             return redirect_to("/admin/users/", "At least one active administrator is required.")
     target.is_active = activate
+    if not activate:
+        # Deactivation already blocks the next request; bumping the epoch also
+        # kills any cookie that was copied before it happened.
+        target.session_epoch = int(target.session_epoch or 0) + 1
     audit(
         db, user,
         "user.activated" if activate else "user.deactivated",
@@ -150,6 +158,32 @@ def user_set_active(
     return redirect_to("/admin/users/", f"{'Activated' if activate else 'Deactivated'} {target.username}.")
 
 
+@router.post("/admin/users/{user_id}/sessions/")
+def user_revoke_sessions(
+    request: Request,
+    user_id: int,
+    user: UserDep,
+    db: Session = Depends(get_db),
+):
+    """End every session this account holds, without touching its password.
+
+    The incident-response control: when an analyst's laptop is lost or a cookie
+    may have been copied, this is what makes the existing session useless. It
+    also signs the account out of its own open tabs, including this one if an
+    administrator does it to themselves.
+    """
+    if not can_manage_users(user):
+        raise HTTPException(status_code=403)
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404)
+    target.session_epoch = int(target.session_epoch or 0) + 1
+    audit(db, user, "user.sessions_revoked", f"Revoked every session for {target.username}.", "user", str(target.id), request)
+    db.commit()
+    logger.info("Sessions revoked for '%s' by %s", target.username, user.username)
+    return redirect_to("/admin/users/", f"Signed {target.username} out everywhere.")
+
+
 @router.post("/admin/users/{user_id}/delete/")
 def user_delete(
     request: Request,
@@ -159,10 +193,9 @@ def user_delete(
 ):
     """Remove an account that never touched a ticket.
 
-    SQLite here does not enforce foreign keys, so deleting a user who worked
-    tickets would not fail loudly — it would blank "Created by"/"Assigned to" on
-    their alerts and orphan their audit rows. Refuse instead and point at
-    deactivation, which keeps attribution intact.
+    Deleting an account that worked tickets would blank "Created by"/"Assigned
+    to" on their alerts and orphan their audit rows, so the check below refuses
+    and points at deactivation, which keeps attribution intact.
     """
     if not can_manage_users(user):
         raise HTTPException(status_code=403)

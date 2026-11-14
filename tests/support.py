@@ -24,6 +24,11 @@ STATE_DIR = pathlib.Path(
     os.environ.get("SOC_TEST_PGDATA", pathlib.Path(tempfile.gettempdir()) / "sentriq-tests-pg")
 )
 
+# The suite hashes passwords hundreds of times; at the production cost (600k
+# PBKDF2 rounds, ~370 ms each) the fixtures alone would take minutes. The cost
+# is a deployment setting, so lowering it here tests the same code paths.
+os.environ["PASSWORD_ITERATIONS"] = "1000"
+
 _server = pgserver.get_server(str(STATE_DIR), cleanup_mode=None)  # pyright: ignore[reportPrivateImportUsage]
 _BASE_URI = _server.get_uri()
 

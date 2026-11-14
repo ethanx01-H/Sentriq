@@ -24,7 +24,9 @@ class TestPasswordHashing:
     def test_hash_password(self):
         hashed = hash_password("TestPass123!")
         assert hashed.startswith("pbkdf2_sha256$")
-        assert len(hashed.split("$")) == 3
+        # algorithm$iterations$salt$digest: the cost travels with the hash, so it
+        # can be raised later without invalidating every existing password.
+        assert len(hashed.split("$")) == 4
 
     def test_hash_password_with_salt(self):
         salt = "test_salt_123"

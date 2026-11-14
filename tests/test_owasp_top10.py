@@ -167,8 +167,9 @@ class TestA02CryptographicFailures:
         hashed = hash_password("Test123!")
         assert "pbkdf2_sha256" in hashed
         parts = hashed.split("$")
-        assert len(parts) == 3
-        assert len(parts[1]) >= 32
+        assert len(parts) == 4
+        assert parts[1].isdigit()
+        assert len(parts[2]) >= 32
 
     def test_unique_salts(self):
         h1 = hash_password("Test123!")
@@ -455,10 +456,14 @@ class TestA10SSRF:
 class TestAdditionalSecurity:
 
     def test_pbkdf2_iterations(self):
-        from sentriq.auth import hash_password
+        """The cost is recorded in every hash, and the shipped default is 600k."""
         import inspect
-        source = inspect.getsource(hash_password)
-        assert "240_000" in source or "240000" in source
+
+        from sentriq import config
+        from sentriq.auth import hash_password
+
+        assert hash_password("x").split("$")[1] == str(config.PASSWORD_ITERATIONS)
+        assert '"600000"' in inspect.getsource(config)
 
     def test_session_samesite(self, client):
         login_with_csrf(client, "l1", "Password123!")

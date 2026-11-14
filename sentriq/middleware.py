@@ -15,7 +15,9 @@ from .config import (
     RATE_LIMIT_EXEMPT_PREFIXES,
     RATE_LIMIT_REQUESTS,
     RATE_LIMIT_WINDOW,
+    cookie_name,
 )
+from .auth import set_session_cookie
 from .limiter import (
     clear_failed_logins,
     get_store,
@@ -68,7 +70,7 @@ async def security_middleware(request: Request, call_next):
     # CSRF check. With no inbound API left, every state change is a form post
     # made by a signed-in browser, so every one of them is checked.
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-        cookie_token = request.cookies.get("csrf_token")
+        cookie_token = request.cookies.get(cookie_name("csrf_token"))
         header_token = request.headers.get("X-CSRF-Token")
         form_token = None
         content_type = request.headers.get("content-type", "")
@@ -103,6 +105,13 @@ async def security_middleware(request: Request, call_next):
         metrics.record_request(request.method, 500, time.perf_counter() - started)
         raise
     metrics.record_request(request.method, response.status_code, time.perf_counter() - started)
+
+    # Slide the idle window for a live session. The route ran inside call_next
+    # and left the refreshed payload on request.state; re-signing here keeps the
+    # cookie write out of every route and out of the async path's way.
+    refresh = getattr(request.state, "session_refresh", None)
+    if refresh:
+        set_session_cookie(response, refresh)
 
     # Security headers
     response.headers["X-Content-Type-Options"] = "nosniff"

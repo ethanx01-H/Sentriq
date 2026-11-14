@@ -39,6 +39,11 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    # Bumped to revoke every existing session for this account: sign-out, an
+    # administrator revoking sessions, a password reset, a role change or a
+    # deactivation. The session cookie carries the value it was issued with, so
+    # a cookie minted before the bump stops working immediately.
+    session_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
     def __str__(self) -> str:
         return self.username

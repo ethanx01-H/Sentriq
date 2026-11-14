@@ -8,8 +8,18 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import current_user, hash_password, signer, session_stamp, validate_password_strength, verify_password, UserDep
-from ..config import COOKIE_SECURE, LOGIN_LOCKOUT_SECONDS, SESSION_TTL_SECONDS
+from ..auth import (
+    UserDep,
+    current_user,
+    dummy_password_hash,
+    hash_password,
+    needs_rehash,
+    session_payload,
+    set_session_cookie,
+    validate_password_strength,
+    verify_password,
+)
+from ..config import LOGIN_LOCKOUT_SECONDS, PASSWORD_ITERATIONS, cookie_name
 from ..dependencies import get_db
 from ..middleware import clear_failed_logins, is_login_locked, record_failed_login
 from ..models import AuditLog, User
@@ -40,8 +50,13 @@ def login(request: Request, username: Annotated[str, Form()], password: Annotate
         return response
 
     user = db.scalar(select(User).where(User.username == username))
+    # Verify against a throwaway hash when the account does not exist, so an
+    # unknown username costs the same as a real one and cannot be picked out by
+    # response time.
+    password_ok = verify_password(password, user.password_hash if user else dummy_password_hash())
+
     if user and not user.is_active:
-        # Deactivated accounts are refused before the password check, and are
+        # Deactivated accounts are refused before the session is created, and are
         # not counted toward the lockout: the account is already disabled.
         db.add(AuditLog(
             actor=None,
@@ -55,7 +70,7 @@ def login(request: Request, username: Annotated[str, Form()], password: Annotate
         logger.warning("Sign-in attempt for deactivated account '%s' from %s", username, source_ip)
         return render(request, "registration/login.html", {"error": "Invalid username or password."}, db)
 
-    if not user or not verify_password(password, user.password_hash):
+    if not user or not password_ok:
         record_failed_login(source_ip, username)
         db.add(AuditLog(
             actor=user,
@@ -71,15 +86,14 @@ def login(request: Request, username: Annotated[str, Form()], password: Annotate
 
     # Clear only this pair's counters on success.
     clear_failed_logins(source_ip, username)
+    if needs_rehash(user.password_hash):
+        # The cost was raised since this password was set. Rewrite it now, while
+        # the plaintext is in hand, and before the cookie is signed: the session
+        # stamp is derived from the hash.
+        user.password_hash = hash_password(password)
+        logger.info("Upgraded password hash for '%s' to %s iterations", user.username, PASSWORD_ITERATIONS)
     response = redirect_to("/")
-    response.set_cookie(
-        "session",
-        signer.dumps({"user_id": user.id, "session_stamp": session_stamp(user)}),
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="lax",
-        max_age=SESSION_TTL_SECONDS,
-    )
+    set_session_cookie(response, session_payload(user))
     db.add(AuditLog(
         actor=user,
         action="auth.login",
@@ -94,9 +108,21 @@ def login(request: Request, username: Annotated[str, Form()], password: Annotate
 
 
 @router.post("/logout/")
-def logout():
+def logout(request: Request, db: Session = Depends(get_db)):
+    """Sign out, and revoke every session this account holds.
+
+    Clearing the cookie is not revocation: a copied cookie would keep working
+    until it expired. Bumping the epoch invalidates every cookie issued before
+    now, including the one on a stolen laptop. The cost is that signing out ends
+    the same account's other open tabs too.
+    """
+    user = current_user(request, db)
+    if user:
+        user.session_epoch = int(user.session_epoch or 0) + 1
+        audit(db, user, "auth.logout", f"{user.username} signed out.", "user", user.username, request)
+        db.commit()
     response = redirect_to("/login/")
-    response.delete_cookie("session")
+    response.delete_cookie(cookie_name("session"))
     return response
 
 
@@ -123,8 +149,11 @@ def password_change(
         return render(request, "account/password.html", {"error": "New passwords do not match."}, db, user)
     user.password_hash = hash_password(new_password)
     user.must_change_password = False
+    # Changing the password already invalidates every session through the stamp;
+    # the epoch bump makes that revocation explicit and survives a stamp collision.
+    user.session_epoch = int(user.session_epoch or 0) + 1
     audit(db, user, "auth.password_changed", f"{user.username} changed their password.", "user", user.username, request)
     db.commit()
     response = redirect_to("/login/", "Password changed. Sign in with your new password.")
-    response.delete_cookie("session")
+    response.delete_cookie(cookie_name("session"))
     return response

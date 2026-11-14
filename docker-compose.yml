@@ -4,16 +4,21 @@ services:
     image: sentriq:local
     env_file: .env
     environment:
-      APP_ENV: ${APP_ENV:-review}
-      # Postgres only: the app refuses to start without a Postgres URL. If you
-      # change POSTGRES_PASSWORD, set DATABASE_URL to match - keep the password
-      # out of this file rather than nesting interpolation here.
-      DATABASE_URL: ${DATABASE_URL:-postgresql://sentriq:change-me-before-use@postgres:5432/sentriq}
-      # Shared limiter counters. Set REDIS_URL=redis://redis:6379/0 and start with
-      # --profile redis when WEB_CONCURRENCY is greater than 1.
+      # Production by default: the guards in sentriq/config.py refuse a
+      # placeholder key, a non-Secure cookie, a missing ALLOWED_HOSTS and
+      # several workers without Redis, so the safe values are the ones you get
+      # by doing nothing. For a localhost review, set APP_ENV=review and
+      # COOKIE_SECURE=0 in .env (see the block at the end of .env.example).
+      APP_ENV: ${APP_ENV:-production}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+      # The domain this is served on; every other Host header is refused.
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS in .env to the domain, e.g. sentriq.aya.com.mm}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      # One worker unless a shared store is configured: N workers without Redis
+      # multiply every rate limit by N, and a lockout only covers the worker
+      # that saw the failed attempt. Set REDIS_URL and --profile redis to scale.
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
       REDIS_URL: ${REDIS_URL:-}
-      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
-      COOKIE_SECURE: ${COOKIE_SECURE:-0}
       # The host proxy reaches the container over the Docker bridge, so the
       # container sees it as a private 172.x address. If your Docker network uses
       # a different range, set TRUSTED_PROXIES explicitly — do not add ranges
@@ -45,7 +50,10 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-sentriq}
       POSTGRES_USER: ${POSTGRES_USER:-sentriq}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-before-use}
+      # No fallback on purpose: a database that starts with a published default
+      # password is the quietest way to lose a SOC's ticket history. It must
+      # match the password inside DATABASE_URL.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env and use the same value in DATABASE_URL}
     volumes:
       # A host directory again, so `docker compose down -v` cannot delete the
       # database. Back it up like any other Postgres server.
