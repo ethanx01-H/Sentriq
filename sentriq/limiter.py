@@ -5,8 +5,9 @@ worker counts only its own traffic, so N workers allow N times the limit, and a
 lockout only applies to the worker that saw the failed attempt. Setting
 ``REDIS_URL`` moves both counters into Redis so every worker shares one view.
 
-Without Redis the process keeps its own counters, which is what a single-worker
-SQLite pilot needs and is stated plainly in the README.
+Without Redis the process keeps its own counters, which is correct only for a
+single worker: the app refuses to run several workers in production without
+``REDIS_URL``, and says why in the error.
 """
 
 import logging

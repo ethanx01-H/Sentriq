@@ -77,11 +77,28 @@ is why the state directory is outside the repository.
 git clone https://github.com/ethanx01-H/Sentriq.git
 cd Sentriq
 cp .env.example .env
-# Replace APP_SECRET_KEY with a random 32-byte secret.
+# Edit .env before the first start: APP_SECRET_KEY (openssl rand -hex 32),
+# ALLOWED_HOSTS (your domain), POSTGRES_PASSWORD, and DATABASE_URL to match it.
 docker compose up --build
 ```
 
-The review deployment listens on `http://127.0.0.1:8080` and creates no default users or sample incidents. Create the first administrator in a second terminal:
+The compose file now describes a **production deployment**: it refuses to start
+without a real signing key, without `ALLOWED_HOSTS`, and with non-Secure cookies.
+That is deliberate — the defaults you get by doing nothing are the safe ones.
+
+To try it on this machine first, over plain HTTP, use the review values instead:
+
+```bash
+# .env, for a localhost review only
+APP_ENV=review
+COOKIE_SECURE=0
+ALLOWED_HOSTS=localhost,127.0.0.1
+PUBLIC_BASE_URL=http://localhost:8080
+```
+
+Then `docker compose up --build` listens on `http://127.0.0.1:8080` and creates no
+default users or sample incidents. Create the first administrator in a second
+terminal:
 
 ```bash
 docker compose exec sentriq python -m sentriq.manage create-admin admin_l3
@@ -89,7 +106,48 @@ docker compose exec sentriq python -m sentriq.manage create-admin admin_l3
 
 The command prompts for the password twice. Create L1/L2 users from the administrator page and optionally add five synthetic review tickets with `docker compose exec sentriq python -m sentriq.manage seed-demo`. The seed command refuses to run in production. New users are required to change their password by default; the admin can disable this when creating the account. Each user can change their own password from the **Change password** link in the sidebar.
 
-This compose setup binds to localhost for review and defaults to non-secure cookies so it works over local HTTP. For production, set `APP_ENV=production` and `COOKIE_SECURE=1`, put the app behind HTTPS, and restrict access to the proxy/network. Do not expose port 8080 directly to the internet. [nginx.conf](nginx.conf) is an example HTTPS reverse proxy configuration; update its hostname and certificate paths before enabling it.
+### Deploying on a domain
+
+The app is designed to sit behind a reverse proxy on a name, not on an IP. In a
+bank network an IP address is neither stable nor verifiable, and a bare IP cannot
+carry a certificate a browser will trust.
+
+1. **DNS**: point a name at the host, e.g. `sentriq.aya.com.mm`.
+2. **Certificate**: `certbot --nginx -d sentriq.aya.com.mm`, or install the bank's
+   internal CA certificate.
+3. **Proxy**: start from [nginx.conf](nginx.conf). It redirects HTTP to HTTPS,
+   forwards `Host`, `X-Forwarded-For`, `X-Real-IP` and `X-Forwarded-Proto`, hides
+   the origin's `Server` header, and rate-limits `/login/`.
+4. **App environment**, in `.env`:
+
+   ```
+   APP_ENV=production
+   COOKIE_SECURE=1
+   ALLOWED_HOSTS=sentriq.aya.com.mm
+   PUBLIC_BASE_URL=https://sentriq.aya.com.mm
+   ```
+
+5. **Keep the app off the network.** Compose binds it to `127.0.0.1:8080`, so only
+   the proxy on that host can reach it. Do not publish 8080 on the LAN, and do not
+   put the app port in a load-balancer pool that bypasses the proxy.
+
+What the domain settings buy you:
+
+- `ALLOWED_HOSTS` is enforced by `TrustedHostMiddleware`. A request arriving with
+  any other `Host` header is refused with 400 before it reaches a route, so a
+  lookalike name cannot be used to poison links or the audit trail.
+- The session, CSRF and flash cookies are named `__Host-…` once `COOKIE_SECURE=1`.
+  That prefix requires `Secure`, `Path=/` and no `Domain` attribute, and it stops
+  a sibling subdomain (or a compromised host on the same parent domain) from
+  overwriting this app's cookies.
+- `PUBLIC_BASE_URL` is what notification e-mails and Teams cards link to, so they
+  point at the name rather than at whatever the app guessed.
+- `TRUSTED_PROXIES` must be the address the proxy connects from. Anything on that
+  list may claim any client address, which is how per-IP limits and the audit
+  source IP are keyed — do not list a range wider than the proxy itself.
+
+`/metrics` behind a proxy is never a loopback request, so set `METRICS_TOKEN` and
+scrape with `Authorization: Bearer <token>`.
 
 ### Where the data lives, and how to update safely
 
@@ -309,6 +367,18 @@ Admins create users on the **Users** page and can deactivate, reactivate or dele
 **Delete** removes the row permanently, but only for an account with no history — no tickets, timeline events, evidence or audit entries. If anything references the account the delete is refused, and the message states how many records would lose their attribution. That refusal is deliberate: the database would refuse the delete anyway, but a raw foreign-key error is a poor thing to show an administrator, so the check explains which records would lose their attribution. For a leaver who touched tickets, deactivate instead — access ends immediately and the record stays intact.
 
 Two guards apply to both actions: you cannot act on your own account, and the last active administrator cannot be removed.
+
+**Sessions.** A signed-in session ends at whichever comes first: 8 hours after
+sign-in (`SESSION_TTL_SECONDS`), or 30 minutes without a request
+(`SESSION_IDLE_SECONDS`). The idle clock moves with each request; the absolute one
+does not, so a session left open all day still ends.
+
+Signing out revokes the session on the server, not just in the browser: the
+account's `session_epoch` is bumped and every cookie issued before that moment is
+refused, including a copy taken from a stolen laptop. The same bump happens on a
+password change, a password reset, a role change and a deactivation. The **Sign
+out** button on the Users page does it to another account without changing its
+password — that is the control to reach for when a device is lost.
 
 Timestamps are stored in UTC and rendered in the configured zone (`DISPLAY_TIMEZONE`, default `Asia/Yangon`) with the zone labelled above the activity log and the audit table.
 

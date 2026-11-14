@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import secrets
 import shutil
 import signal
 import subprocess
@@ -176,6 +177,12 @@ def seed_demo_data(url: str) -> None:
     """Create the review accounts and the synthetic demo tickets in Postgres."""
     from sqlalchemy import create_engine, text
 
+    # sentriq.config reads DATABASE_URL at import time, so it has to be in this
+    # process too — not only in the children's environment. Without this the
+    # first run against an empty state directory dies here with "DATABASE_URL is
+    # required", which only shows up on a fresh clone.
+    os.environ["DATABASE_URL"] = url
+
     from sentriq.auth import hash_password
     from sentriq.dburl import normalise_database_url
 
@@ -234,6 +241,32 @@ def health() -> dict | None:
         return None
 
 
+def app_secret() -> str:
+    """One signing key for every worker, persisted with the demo state.
+
+    Without it each of the four workers generates its own key and the session
+    cookie bounces between them, which looks like a broken login rather than a
+    missing setting.
+    """
+    secret = (os.environ.get("APP_SECRET_KEY") or "").strip()
+    if secret:
+        return secret
+    path = STATE / "secret.txt"
+    if path.exists():
+        return path.read_text().strip()
+    secret = secrets.token_hex(32)
+    path.write_text(secret)
+    return secret
+
+
+def backup_label(info: dict) -> str:
+    """Describe snapshot freshness from /healthz, which no longer names the file."""
+    backup = info.get("backup") or {}
+    if backup.get("age_hours") is None:
+        return "none yet"
+    return f"{backup['age_hours']:.1f} h old" + (" (STALE)" if backup.get("stale") else "")
+
+
 def start_app(url: str) -> None:
     if app_running():
         say("app already running")
@@ -246,7 +279,9 @@ def start_app(url: str) -> None:
         "DATA_DIR": str(ROOT / "data"),
         "BACKUP_DIR": str(STATE / "backups"),
         "APP_ENV": "review",
+        "APP_SECRET_KEY": app_secret(),
         "COOKIE_SECURE": "0",
+        "ALLOWED_HOSTS": "localhost,127.0.0.1",
         "WEB_CONCURRENCY": WORKERS,
     }
     with LOG_FILE.open("ab") as log:
@@ -254,7 +289,7 @@ def start_app(url: str) -> None:
             [
                 str(ROOT / ".venv" / "bin" / "gunicorn"),
                 "main:app",
-                "-k", "uvicorn.workers.UvicornWorker",
+                "-k", "sentriq.worker.UvicornWorker",
                 "-w", WORKERS,
                 "-b", f"0.0.0.0:{PORT}",
                 "--log-level", "warning",
@@ -322,7 +357,7 @@ def command_start() -> int:
     say("")
     say(f"  Sentriq is up at http://localhost:{PORT}")
     say(f"  database      Postgres (bundled), {ticket_count(url)} tickets")
-    say(f"  backup        {info.get('backup', {}).get('newest') or 'none yet'}")
+    say(f"  backup        {backup_label(info)}")
     say(f"  accounts      admin_l3 / l2 / l1, password SocReview2026!")
     say(f"  logs          {LOG_FILE}")
     say("")
@@ -337,7 +372,7 @@ def command_status() -> int:
     say(f"app:      {'up' if app_running() else 'down'}")
     if info:
         say(f"health:   {info.get('status')} (database {info.get('database')})")
-        say(f"backup:   {info.get('backup', {}).get('newest') or 'none'}")
+        say(f"backup:   {backup_label(info)}")
     if url:
         say(f"tickets:  {ticket_count(url)}")
     return 0 if (url and info) else 1
