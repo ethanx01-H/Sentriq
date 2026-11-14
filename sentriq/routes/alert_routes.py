@@ -9,18 +9,10 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import (
-    can_create_alert,
-    can_delete_alert,
-    can_edit_alert,
-    can_escalate_alert,
-    can_assign_alert,
-    assignable_roles_for,
-    require_user,
-    user_role,
-)
+from ..auth import require_user
 from ..dependencies import get_db
 from ..models import Alert, AlertEvent, Evidence, User
+from ..permissions import assignable_roles_for, can, role_of
 from ..services.alert_service import (
     RANGE_CHOICES,
     alert_query,
@@ -29,6 +21,7 @@ from ..services.alert_service import (
     export_csv,
     filtered_alerts,
     filtered_alerts_paginated,
+    filter_summary,
     form_values,
     sla_status,
 )
@@ -106,8 +99,18 @@ def my_alerts(request: Request, db: Session = Depends(get_db), user: User = Depe
 
 @router.get("/alerts/export.csv")
 def alert_export(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    if not can(user, "alert.export"):
+        raise HTTPException(status_code=403)
     alerts = filtered_alerts(db, request)
     csv_content = export_csv(alerts)
+    # A CSV leaves the building with every row it matched, so the trail records
+    # who pulled it, how many rows, and which filter produced them.
+    audit(
+        db, user, "alert.exported",
+        f"{user.username} exported {len(alerts)} ticket(s) as CSV ({filter_summary(request)}).",
+        "alert_batch", str(len(alerts)), request,
+    )
+    db.commit()
     return Response(
         csv_content,
         media_type="text/csv",
@@ -117,7 +120,7 @@ def alert_export(request: Request, db: Session = Depends(get_db), user: User = D
 
 @router.get("/alerts/new/", response_class=HTMLResponse)
 def alert_create_page(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
-    if not can_create_alert(user):
+    if not can(user, "alert.create"):
         raise HTTPException(status_code=403)
     return render(request, "alerts/form.html", {"title": "New alert", "alert": None, "form": {}}, db, user)
 
@@ -137,7 +140,7 @@ def alert_create(
     sla_hours: Annotated[str, Form()] = "8",
     evidence_files: Annotated[list[UploadFile] | None, File()] = None,
 ):
-    if not can_create_alert(user):
+    if not can(user, "alert.create"):
         raise HTTPException(status_code=403)
     # Declared as form parameters rather than request.form(): a sync handler
     # cannot await the parse, and FastAPI already parsed multipart for us.
@@ -196,15 +199,15 @@ def alert_detail(request: Request, pk: int, db: Session = Depends(get_db), user:
     evidence = list(db.scalars(select(Evidence).where(Evidence.alert_id == alert.id).order_by(Evidence.created_at.desc(), Evidence.id.desc())))
     return render(request, "alerts/detail.html", {
         "alert": alert,
-        "can_edit": can_edit_alert(user, alert),
-        "can_escalate": can_escalate_alert(user) and alert.status != "Closed" and alert.escalated_by_id is None,
-        "can_take": alert.status == "Open" and alert.assigned_to_id is None and user_role(user) in {"L1", "L2", "L3"},
+        "can_edit": can(user, "alert.edit", alert),
+        "can_escalate": can(user, "alert.escalate", alert) and alert.escalated_by_id is None,
+        "can_take": alert.status == "Open" and alert.assigned_to_id is None and can(user, "alert.take", alert),
         "status_choices": ["Open", "WIP", "Pending"],
-        "can_assign": can_assign_alert(user),
+        "can_assign": can(user, "alert.assign", alert),
         "assignable_users": assignable_users,
         "evidence": evidence,
         "duplicates": merge_service.possible_duplicates(db, alert),
-        "can_merge": user_role(user) in {"L2", "L3"} and alert.status != "Closed",
+        "can_merge": can(user, "alert.merge", alert),
     }, db, user)
 
 
@@ -213,7 +216,7 @@ def alert_edit_page(request: Request, pk: int, db: Session = Depends(get_db), us
     alert = db.get(Alert, pk)
     if not alert:
         raise HTTPException(status_code=404)
-    if not can_edit_alert(user, alert):
+    if not can(user, "alert.edit", alert):
         raise HTTPException(status_code=403)
     form = {
         "title": alert.title,
@@ -248,7 +251,7 @@ def alert_edit(
     alert = db.get(Alert, pk)
     if not alert:
         raise HTTPException(status_code=404)
-    if not can_edit_alert(user, alert):
+    if not can(user, "alert.edit", alert):
         raise HTTPException(status_code=403)
     form = {
         "title": title,
@@ -288,12 +291,12 @@ def alert_escalate(request: Request, pk: int, db: Session = Depends(get_db), use
     alert = db.get(Alert, pk)
     if not alert:
         raise HTTPException(status_code=404)
-    if not can_escalate_alert(user):
-        raise HTTPException(status_code=403)
     if alert.status == "Closed":
         raise HTTPException(status_code=409, detail="Closed tickets cannot be escalated.")
     if alert.escalated_by_id is not None:
         raise HTTPException(status_code=409, detail="Ticket has already been escalated.")
+    if not can(user, "alert.escalate", alert):
+        raise HTTPException(status_code=403)
     alert.escalated_by = user
     alert.updated_by = user
     db.add(AlertEvent(alert=alert, event_type="escalated", actor=user, message=f"{user.username} escalated this alert."))
@@ -308,7 +311,7 @@ def alert_take(request: Request, pk: int, db: Session = Depends(get_db), user: U
     alert = db.get(Alert, pk)
     if not alert:
         raise HTTPException(status_code=404)
-    if user_role(user) not in {"L1", "L2", "L3"}:
+    if not can(user, "alert.take", alert):
         raise HTTPException(status_code=403)
     if alert.status != "Open" or alert.assigned_to_id is not None:
         raise HTTPException(status_code=409, detail="Only unassigned Open tickets can be taken.")
@@ -337,22 +340,25 @@ def alert_status_update(
     alert = db.get(Alert, pk)
     if not alert:
         raise HTTPException(status_code=404)
-    if not can_edit_alert(user, alert):
-        raise HTTPException(status_code=403)
     if alert.status == "Closed":
         raise HTTPException(status_code=409, detail="Closed tickets cannot be reopened here.")
+    # An unassigned ticket may be taken by setting a working status; that is the
+    # same action as the Take button and leaves the same timeline entry.
+    taking = alert.assigned_to_id is None and status in {"WIP", "Pending"}
+    if not (can(user, "alert.status", alert) or (taking and can(user, "alert.take", alert))):
+        raise HTTPException(status_code=403)
     if status not in {"Open", "WIP", "Pending"}:
         raise HTTPException(status_code=422, detail="Select Open, WIP, or Pending.")
 
     old_status = alert.status
     if status == "Open":
-        if alert.assigned_to_id is not None and alert.assigned_to_id != user.id and not can_assign_alert(user):
+        if alert.assigned_to_id is not None and alert.assigned_to_id != user.id and not can(user, "alert.assign", alert):
             raise HTTPException(status_code=403)
         alert.assigned_to = None
         alert.assigned_by = None
         alert.analyst = "Unassigned"
     elif alert.assigned_to_id is None:
-        if user_role(user) not in {"L1", "L2"}:
+        if role_of(user) not in {"L1", "L2"}:
             raise HTTPException(status_code=409, detail="Assign this ticket to an analyst first.")
         alert.assigned_to = user
         alert.assigned_by = user
@@ -361,7 +367,7 @@ def alert_status_update(
             alert=alert, event_type="assigned", actor=user, assigned_to=user,
             message=f"{user.username} assigned this ticket to themselves.",
         ))
-    elif alert.assigned_to_id != user.id and not can_assign_alert(user):
+    elif alert.assigned_to_id != user.id and not can(user, "alert.assign", alert):
         raise HTTPException(status_code=403, detail="Only the assigned analyst or an assigning role can change this ticket's status.")
 
     alert.status = status
@@ -386,11 +392,11 @@ def alert_assign(
     alert = db.get(Alert, pk)
     if not alert:
         raise HTTPException(status_code=404)
-    roles = assignable_roles_for(user)
-    if not roles:
-        raise HTTPException(status_code=403)
     if alert.status == "Closed":
         raise HTTPException(status_code=409, detail="Closed tickets cannot be reassigned.")
+    roles = assignable_roles_for(user)
+    if not can(user, "alert.assign", alert) or not roles:
+        raise HTTPException(status_code=403)
     try:
         target = db.get(User, int(assigned_to or 0))
     except (TypeError, ValueError):
@@ -448,10 +454,10 @@ def alert_close(
     alert = db.get(Alert, pk)
     if not alert:
         raise HTTPException(status_code=404)
-    if not can_edit_alert(user, alert):
-        raise HTTPException(status_code=403)
     if alert.status == "Closed":
         raise HTTPException(status_code=409, detail="Ticket is already closed.")
+    if not can(user, "alert.close", alert):
+        raise HTTPException(status_code=403)
     summary = resolution_summary.strip()
     if not summary:
         return redirect_to(alert.get_absolute_url(), "Resolution summary is required.")
@@ -466,7 +472,7 @@ def alert_close(
 
 @router.post("/alerts/{pk}/delete/")
 def alert_delete(request: Request, pk: int, db: Session = Depends(get_db), user: User = Depends(require_user)):
-    if not can_delete_alert(user):
+    if not can(user, "alert.delete"):
         raise HTTPException(status_code=403)
     raise HTTPException(status_code=409, detail="Alert deletion is disabled to preserve incident and evidence history. Close the alert instead.")
 
@@ -482,7 +488,9 @@ def alert_merge(
     alert = db.get(Alert, pk)
     if not alert:
         raise HTTPException(status_code=404)
-    if user_role(user) not in {"L2", "L3"}:
+    if alert.status == "Closed":
+        return redirect_to(alert.get_absolute_url(), "This ticket is already closed.")
+    if not can(user, "alert.merge", alert):
         raise HTTPException(status_code=403)
     wanted = target_alert_id.strip().upper()
     target = db.scalar(select(Alert).where(Alert.alert_id == wanted))
@@ -541,7 +549,7 @@ def alert_bulk(
     already = ""
     for alert in alerts:
         if action == "assign_me":
-            if alert.status == "Closed" or not can_create_alert(user):
+            if alert.status == "Closed" or not can(user, "alert.take", alert):
                 skipped += 1
                 continue
             if alert.assigned_to_id == user.id and alert.analyst == user.username:
@@ -561,7 +569,7 @@ def alert_bulk(
             changed += 1
         elif action.startswith("status:"):
             wanted = action.split(":", 1)[1]
-            if wanted not in {"Open", "WIP", "Pending"} or alert.status == "Closed" or not can_edit_alert(user, alert):
+            if wanted not in {"Open", "WIP", "Pending"} or alert.status == "Closed" or not can(user, "alert.status", alert):
                 skipped += 1
                 continue
             if alert.status == wanted:

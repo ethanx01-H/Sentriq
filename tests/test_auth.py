@@ -15,7 +15,7 @@ from sentriq.auth import (
     can_assign_alert,
     assignable_roles_for,
 )
-from sentriq.models import User
+from sentriq.models import Alert, User
 
 
 class TestPasswordHashing:
@@ -128,13 +128,15 @@ class TestPermissions:
         user = User(username="l2", role="L2", is_admin=False)
         assert can_delete_alert(user) is False
 
-    def test_l3_can_delete_alert(self):
+    def test_l3_cannot_delete_alert(self):
         user = User(username="l3", role="L3", is_admin=False)
-        assert can_delete_alert(user) is True
+        assert can_delete_alert(user) is False
 
-    def test_admin_can_delete_alert(self):
+    def test_admin_cannot_delete_alert(self):
+        # Deleting a ticket would take its timeline and evidence with it, so the
+        # matrix grants the action to nobody. The route explains the refusal.
         user = User(username="admin", role="L1", is_admin=True)
-        assert can_delete_alert(user) is True
+        assert can_delete_alert(user) is False
 
     def test_l1_cannot_manage_users(self):
         user = User(username="l1", role="L1", is_admin=False)
@@ -194,37 +196,40 @@ class TestAssignableRoles:
 
 
 class TestEditPermissions:
-    """Test alert edit permissions."""
+    """Editing follows ownership for L1, and stops at a closed ticket for everyone."""
 
-    def _make_alert(self, status="Open"):
-        """Create a mock alert."""
-        from unittest.mock import MagicMock
-        alert = MagicMock()
-        alert.status = status
-        return alert
+    def _alert(self, status="Open", assigned_to_id=None):
+        return Alert(alert_id="#1", title="A ticket", status=status, assigned_to_id=assigned_to_id)
 
-    def test_l1_can_edit_new_alert(self):
-        user = User(username="l1", role="L1", is_admin=False)
-        alert = self._make_alert("Open")
-        assert can_edit_alert(user, alert) is True
+    def _user(self, role, user_id=7, is_admin=False):
+        return User(id=user_id, username=f"u{user_id}", role=role, is_admin=is_admin)
 
-    def test_l1_can_edit_investigating_alert(self):
-        user = User(username="l1", role="L1", is_admin=False)
-        alert = self._make_alert("WIP")
-        assert can_edit_alert(user, alert) is True
+    def test_l1_can_edit_their_own_open_alert(self):
+        assert can_edit_alert(self._user("L1"), self._alert("Open", 7)) is True
 
-    def test_l1_cannot_edit_closed_alert(self):
-        user = User(username="l1", role="L1", is_admin=False)
-        alert = self._make_alert("Closed")
-        assert can_edit_alert(user, alert) is False
+    def test_l1_can_edit_their_own_ticket_in_progress(self):
+        assert can_edit_alert(self._user("L1"), self._alert("WIP", 7)) is True
 
-    def test_l2_can_edit_wip_alert(self):
-        user = User(username="l2", role="L2", is_admin=False)
-        alert = self._make_alert("WIP")
-        assert can_edit_alert(user, alert) is True
+    def test_l1_cannot_edit_another_analysts_alert(self):
+        # The gap this closes: an L1 could rewrite or close an L2's investigation.
+        assert can_edit_alert(self._user("L1"), self._alert("WIP", 8)) is False
 
-    def test_l3_can_edit_any_alert(self):
-        user = User(username="l3", role="L3", is_admin=False)
-        for status in ["Open", "Pending", "WIP", "Closed"]:
-            alert = self._make_alert(status)
-            assert can_edit_alert(user, alert) is True
+    def test_l1_cannot_edit_an_unassigned_alert(self):
+        # Take it first, so the timeline says who picked it up.
+        assert can_edit_alert(self._user("L1"), self._alert("Open", None)) is False
+
+    def test_l1_cannot_edit_their_own_closed_alert(self):
+        assert can_edit_alert(self._user("L1"), self._alert("Closed", 7)) is False
+
+    def test_l2_can_edit_any_open_alert(self):
+        assert can_edit_alert(self._user("L2"), self._alert("WIP", 8)) is True
+
+    def test_l2_cannot_edit_a_closed_alert(self):
+        assert can_edit_alert(self._user("L2"), self._alert("Closed", 8)) is False
+
+    def test_l3_can_edit_any_open_alert(self):
+        for status in ["Open", "Pending", "WIP"]:
+            assert can_edit_alert(self._user("L3"), self._alert(status, 8)) is True
+
+    def test_l3_cannot_edit_a_closed_alert(self):
+        assert can_edit_alert(self._user("L3"), self._alert("Closed", 8)) is False

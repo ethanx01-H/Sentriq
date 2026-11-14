@@ -8,10 +8,11 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..auth import can_manage_users, hash_password, validate_password_strength, require_user, UserDep
+from ..auth import hash_password, validate_password_strength, require_user, UserDep
 from ..config import ROLES
 from ..dependencies import get_db
 from ..models import Alert, AlertEvent, AuditLog, Evidence, User
+from ..permissions import can
 from ..utils import audit, redirect_to, render
 
 logger = logging.getLogger("sentriq.admin_routes")
@@ -21,7 +22,7 @@ router = APIRouter()
 
 @router.get("/admin/users/", response_class=HTMLResponse)
 def user_admin(request: Request, user: UserDep, db: Session = Depends(get_db)):
-    if not can_manage_users(user):
+    if not can(user, "user.manage"):
         raise HTTPException(status_code=403)
     users = list(db.scalars(select(User).order_by(User.username)))
     return render(request, "admin/users.html", {"users": users, "error": None}, db, user)
@@ -37,7 +38,7 @@ def user_create(
     db: Session = Depends(get_db),
     must_change_password: Annotated[bool, Form()] = False,
 ):
-    if not can_manage_users(user):
+    if not can(user, "user.manage"):
         raise HTTPException(status_code=403)
     username = username.strip()
     users = list(db.scalars(select(User).order_by(User.username)))
@@ -73,7 +74,7 @@ def user_role_update(
     user: UserDep,
     db: Session = Depends(get_db),
 ):
-    if not can_manage_users(user):
+    if not can(user, "user.manage"):
         raise HTTPException(status_code=403)
     target = db.get(User, user_id)
     if not target:
@@ -101,7 +102,7 @@ def user_password_reset(
     user: UserDep,
     db: Session = Depends(get_db),
 ):
-    if not can_manage_users(user):
+    if not can(user, "user.manage"):
         raise HTTPException(status_code=403)
     target = db.get(User, user_id)
     if not target:
@@ -126,7 +127,7 @@ def user_set_active(
     user: UserDep,
     db: Session = Depends(get_db),
 ):
-    if not can_manage_users(user):
+    if not can(user, "user.manage"):
         raise HTTPException(status_code=403)
     target = db.get(User, user_id)
     if not target:
@@ -172,7 +173,7 @@ def user_revoke_sessions(
     also signs the account out of its own open tabs, including this one if an
     administrator does it to themselves.
     """
-    if not can_manage_users(user):
+    if not can(user, "user.manage"):
         raise HTTPException(status_code=403)
     target = db.get(User, user_id)
     if not target:
@@ -197,7 +198,7 @@ def user_delete(
     to" on their alerts and orphan their audit rows, so the check below refuses
     and points at deactivation, which keeps attribution intact.
     """
-    if not can_manage_users(user):
+    if not can(user, "user.manage"):
         raise HTTPException(status_code=403)
     target = db.get(User, user_id)
     if not target:
@@ -266,7 +267,7 @@ def describe_history(history: dict[str, int]) -> str:
 
 @router.get("/admin/audit/", response_class=HTMLResponse)
 def audit_log_page(request: Request, user: UserDep, db: Session = Depends(get_db)):
-    if not can_manage_users(user):
+    if not can(user, "user.manage"):
         raise HTTPException(status_code=403)
     logs = list(db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(200)))
     return render(request, "admin/audit.html", {"logs": logs}, db, user)

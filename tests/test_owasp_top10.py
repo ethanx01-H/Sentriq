@@ -92,11 +92,13 @@ def admin_session(client):
     return client
 
 
-def create_test_alert(db, status="Open", severity="Medium"):
+def create_test_alert(db, status="Open", severity="Medium", assigned_to="l1"):
+    owner = db.scalar(select(User).where(User.username == assigned_to)) if assigned_to else None
     alert = Alert(
         alert_id="#TEST01", title="Test Alert", description="Test description",
         source="Manual", severity=severity, status=status, analyst="l1",
         tactic="Initial Access", asset="test-host", iocs_json='["192.168.1.1"]', sla_hours=8,
+        assigned_to=owner,
     )
     db.add(alert)
     db.commit()

@@ -24,6 +24,11 @@ from .config import (
 )
 from .dependencies import get_db
 from .models import User
+from .permissions import (
+    assignable_roles_for as _assignable_roles_for,
+    can,
+    role_of,
+)
 
 logger = logging.getLogger("sentriq.auth")
 
@@ -191,42 +196,39 @@ def require_user(request: Request, db: Session = Depends(get_db)) -> User:
 
 def user_role(user: User) -> str:
     """Get effective role (L3 for admins)."""
-    return "L3" if user.is_admin else user.role
+    return role_of(user) or "L1"
 
 
+# The policy itself lives in sentriq/permissions.py. These wrappers exist because
+# the shared template context and the Jinja templates speak in these names; the
+# routes call permissions.can() directly so there is one implementation.
 def can_create_alert(user: User) -> bool:
-    return user_role(user) in {"L1", "L2", "L3"}
+    return can(user, "alert.create")
 
 
 def can_edit_alert(user: User, alert) -> bool:
-    role = user_role(user)
-    return role in {"L2", "L3"} or (role == "L1" and alert.status != "Closed")
+    return can(user, "alert.edit", alert)
 
 
 def can_delete_alert(user: User) -> bool:
-    return user_role(user) == "L3"
+    return can(user, "alert.delete")
 
 
 def can_manage_users(user: User) -> bool:
-    return user_role(user) == "L3"
+    return can(user, "user.manage")
 
 
 def can_escalate_alert(user: User) -> bool:
-    return user_role(user) in {"L1", "L2"}
+    return can(user, "alert.escalate")
 
 
 def can_assign_alert(user: User) -> bool:
-    return user_role(user) in {"L2", "L3"}
+    return can(user, "alert.assign")
 
 
 def assignable_roles_for(user: User) -> list[str]:
     """Get list of roles this user can assign alerts to."""
-    role = user_role(user)
-    if role == "L3":
-        return ["L1", "L2"]
-    if role == "L2":
-        return ["L1"]
-    return []
+    return _assignable_roles_for(user)
 
 
 UserDep = Annotated[User, Depends(require_user)]

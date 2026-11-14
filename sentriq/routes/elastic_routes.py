@@ -14,8 +14,9 @@ from sqlalchemy.orm import Session
 
 from alerts.elastic import parse_elastic_alerts
 
-from ..auth import can_create_alert, UserDep
+from ..auth import UserDep
 from ..dependencies import get_db
+from ..permissions import can
 from ..services.alert_service import create_or_get_alert
 from ..utils import audit, redirect_to, render
 
@@ -26,14 +27,14 @@ router = APIRouter()
 
 @router.get("/elastic/import/", response_class=HTMLResponse)
 def elastic_import_page(request: Request, user: UserDep, db: Session = Depends(get_db)):
-    if not can_create_alert(user):
+    if not can(user, "alert.create"):
         raise HTTPException(status_code=403)
     return render(request, "alerts/elastic_import.html", {"raw_json": "", "error": None}, db, user)
 
 
 @router.post("/elastic/import/")
 def elastic_import(request: Request, raw_json: Annotated[str, Form()], user: UserDep, db: Session = Depends(get_db)):
-    if not can_create_alert(user):
+    if not can(user, "alert.create"):
         raise HTTPException(status_code=403)
     try:
         parsed = parse_elastic_alerts(raw_json)

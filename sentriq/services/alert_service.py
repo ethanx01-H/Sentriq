@@ -296,6 +296,24 @@ def filtered_alerts(db: Session, request) -> list[Alert]:
     return list(db.scalars(alert_query(request)))
 
 
+FILTER_KEYS = ("q", "severity", "status", "source", "analyst", "sla", "range", "from", "to")
+
+
+def filter_summary(request) -> str:
+    """The active filters, spelled out for the audit trail.
+
+    A CSV export leaves the building with every ticket it matched, so the audit
+    row has to say which rows left: "exported 4,120 tickets" without the filter
+    is a fact nobody can review later.
+    """
+    parts = []
+    for key in FILTER_KEYS:
+        value = (request.query_params.get(key) or "").strip()
+        if value:
+            parts.append(f"{key}={value}")
+    return ", ".join(parts) if parts else "no filters"
+
+
 def dashboard_counts(db: Session, query) -> dict[str, int]:
     """The dashboard tiles, counted by the database.
 
