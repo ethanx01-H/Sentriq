@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from sentriq.models import Alert, AuditLog, Evidence, SlaBreach, User
 from sentriq.services import audit_export, retention_service
@@ -113,6 +113,90 @@ def test_retention_uses_the_closure_date_not_the_creation_date(db, operator, tmp
 
     summary = retention_service.archive(db, days=730, apply=True, archive_dir=tmp_path)
     assert summary["alerts"] == 0
+
+
+def test_expired_alerts_uses_the_closure_cutoff_in_sql(db, operator):
+    old = make_alert(db, operator, title="Expired ticket", closed_days_ago=800)
+    recent = make_alert(db, operator, title="Still inside the window", closed_days_ago=1)
+
+    expired = retention_service.expired_alerts(db, days=730)
+
+    assert [alert.id for alert in expired] == [old.id]
+    assert recent.id not in {alert.id for alert in expired}
+
+
+def test_archive_all_processes_expired_tickets_in_batches(db, operator, tmp_path):
+    for index in range(3):
+        make_alert(db, operator, title=f"Old batch {index}", closed_days_ago=800 + index)
+
+    summary = retention_service.archive_all(
+        db, days=730, apply=True, archive_dir=tmp_path, batch_size=1
+    )
+
+    assert summary["alerts"] == 3
+    assert summary["batches"] == 3
+    assert len(summary["archives"]) == 3
+    assert summary["applied"] is True
+    assert db.scalar(select(Alert).where(Alert.title.like("Old batch %"))) is None
+
+
+def test_archive_all_skips_when_another_pass_holds_the_lock(db, engine, operator, tmp_path):
+    make_alert(db, operator, title="Locked ticket", closed_days_ago=800)
+    with engine.connect() as lock:
+        acquired = lock.execute(
+            text("select pg_try_advisory_lock(:key)"),
+            {"key": retention_service.RETENTION_LOCK_KEY},
+        ).scalar()
+        assert acquired is True
+        try:
+            summary = retention_service.archive_all(
+                db, days=730, apply=True, archive_dir=tmp_path, batch_size=1
+            )
+        finally:
+            lock.execute(
+                text("select pg_advisory_unlock(:key)"),
+                {"key": retention_service.RETENTION_LOCK_KEY},
+            )
+
+    assert summary["skipped"] is True
+    assert summary["alerts"] == 0
+    assert db.scalar(select(Alert).where(Alert.title == "Locked ticket")) is not None
+
+
+def test_archive_all_dry_run_reports_without_writing(db, operator, tmp_path):
+    make_alert(db, operator, title="Dry run ticket", closed_days_ago=800)
+
+    summary = retention_service.archive_all(db, days=730, apply=False, archive_dir=tmp_path)
+
+    assert summary["alerts"] == 1
+    assert summary["applied"] is False
+    assert summary["archives"] == []
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_archive_does_not_remove_evidence_when_the_commit_fails(db, operator, tmp_path, monkeypatch):
+    """The files are the last thing removed: a failed commit must leave them."""
+    monkeypatch.setattr(retention_service, "UPLOAD_DIR", tmp_path / "evidence")
+    (tmp_path / "evidence").mkdir()
+    evidence_file = tmp_path / "evidence" / "keep.txt"
+    evidence_file.write_text("payload")
+
+    old = make_alert(db, operator, title="Commit failure", closed_days_ago=800)
+    db.add(Evidence(alert=old, original_name="keep.txt", stored_name="keep.txt",
+                    size_bytes=7, sha256="abc123"))
+    db.commit()
+
+    def fail_commit():
+        raise RuntimeError("commit failed")
+
+    monkeypatch.setattr(db, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="commit failed"):
+        retention_service.archive(db, days=730, apply=True, archive_dir=tmp_path)
+    monkeypatch.undo()
+    db.rollback()
+
+    assert evidence_file.exists()
+    assert db.get(Alert, old.id) is not None
 
 
 def test_audit_export_verifies(db, tmp_path):

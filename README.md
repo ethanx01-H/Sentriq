@@ -86,6 +86,11 @@ The compose file now describes a **production deployment**: it refuses to start
 without a real signing key, without `ALLOWED_HOSTS`, and with non-Secure cookies.
 That is deliberate — the defaults you get by doing nothing are the safe ones.
 
+The stack also starts a `retention` service: once a day it archives and removes
+closed tickets older than `RETENTION_DAYS` (730 by default). If you are not ready
+to enforce that window, `docker compose stop retention` until you are. See
+[Data storage and retention](#data-storage-and-retention).
+
 To try it on this machine first, over plain HTTP, use the review values instead:
 
 ```bash
@@ -229,14 +234,29 @@ DATABASE_URL=postgresql://sentriq:***@db:5432/sentriq
 
 **Shared limiter counters.** Rate limits and login lockouts live in process memory by default, which is correct for one worker and wrong for several: each worker counts only its own traffic, so N workers allow N times the limit, and a lockout applies only to the worker that saw the failed attempt. Set `REDIS_URL` to share both counters across workers. Without Redis, either keep `WEB_CONCURRENCY=1` or accept the multiplied limit.
 
-**Retention (730 days).** `python -m sentriq.manage retention` prints what would be archived; add `--apply` to actually do it:
+**Retention (730 days, daily).** The `retention` compose service runs one pass at startup and then every 24 hours. It archives and removes closed tickets whose closure date is more than 730 days old; the web app does not depend on it. Pause it with `docker compose stop retention`.
+
+A pass processes the backlog in batches (`RETENTION_BATCH_SIZE`, default 500), one transaction per batch, and holds a Postgres advisory lock so a cron job and the service cannot run at the same time. For each batch it writes a gzipped JSON Lines archive (ticket, timeline, evidence metadata with SHA-256, SLA breaches) into `data/archive/`, reads it back to prove it opens and holds the expected number of tickets, commits the row deletions, and only then removes the evidence files. A failed commit leaves both rows and files in place, so the next pass can retry; an unlink failure is recorded in the audit trail and logged.
+
+Only *closed* tickets are eligible, and the clock starts at closure — a ticket opened three years ago and closed last week keeps its full window. For a dry run or a one-off:
 
 ```bash
 python -m sentriq.manage retention --days 730           # dry run, changes nothing
 python -m sentriq.manage retention --days 730 --apply   # archive, then remove
+python -m sentriq.manage retention-daily                # one daily pass, batched
 ```
 
-Only *closed* tickets are eligible, and the clock starts at closure — a ticket opened three years ago and closed last week keeps its full window. The job writes a gzipped JSON Lines archive (ticket, timeline, evidence metadata with SHA-256, SLA breaches) into `data/archive/`, reads it back to prove it opens and holds the expected number of tickets, and only then deletes rows and evidence files. One audit row records the batch. Nothing is deleted if the archive cannot be verified.
+If you do not run the compose service, schedule the same pass from cron:
+
+```cron
+# Docker
+0 3 * * * cd /path/to/Sentriq && docker compose exec -T sentriq python -m sentriq.manage retention-daily >> /var/log/sentriq-retention.log 2>&1
+
+# Bare Python (no Docker)
+0 3 * * * cd /path/to/Sentriq && .venv/bin/python -m sentriq.manage retention-daily >> /var/log/sentriq-retention.log 2>&1
+```
+
+Retention removes the live ticket, timeline, evidence files and SLA breach rows. It does **not** delete the append-only audit trail or the archives in `data/archive/` — those are the record of what was removed. If your policy also expires the archives, prune `data/archive/` on its own schedule and keep the audit export off-host.
 
 **Immutable audit export.** The audit trail is hash-chained on export: each record carries the hash of the one before it, so a deleted or edited row breaks the chain and verification names the record.
 
@@ -293,7 +313,7 @@ python -m sentriq.manage backup-status   # newest snapshot and its age
 python -m sentriq.manage sla-sweep       # record newly missed SLAs
 ```
 
-Schedule retention, the audit export and the SLA sweep from cron (or Windows Task Scheduler), and alert on `soc_backup_stale`, `soc_backup_age_seconds` and `soc_sla_breaches{state="open"}`. Set `TRUSTED_PROXIES` to the addresses of your reverse proxy so lockouts, rate limits, and audit rows key on the real client address rather than the proxy.
+Retention runs as the `retention` compose service; schedule the audit export and the SLA sweep from cron (or Windows Task Scheduler), and alert on `soc_backup_stale`, `soc_backup_age_seconds` and `soc_sla_breaches{state="open"}`. Set `TRUSTED_PROXIES` to the addresses of your reverse proxy so lockouts, rate limits, and audit rows key on the real client address rather than the proxy.
 
 ## Upgrading and patching a CVE
 
@@ -629,6 +649,7 @@ All settings are controlled via environment variables. See `.env.example` for th
 | `WEB_CONCURRENCY`        | No       | `4`                    | Worker processes; see Performance        |
 | `REDIS_URL`              | No       | unset                  | Shared limiter and lockout counters      |
 | `RETENTION_DAYS`         | No       | `730`                  | Archive window for closed tickets        |
+| `RETENTION_BATCH_SIZE`   | No       | `500`                  | Tickets per transaction in a daily pass  |
 | `METRICS_TOKEN`          | No       | unset                  | Bearer token for `/metrics`              |
 | `BACKUP_MAX_AGE_HOURS`   | No       | `36`                   | Snapshot age that marks `/healthz` stale |
 | `SMTP_HOST`              | No       | unset                  | Email notifications                      |
@@ -672,7 +693,7 @@ host.
 
 The SLA sweep runs at most once every two minutes per worker instead of on every
 page load, and reads the open tickets in one query rather than one query per
-ticket. `python -m sentriq.manage sweep-sla` does the same work from cron if
+ticket. `python -m sentriq.manage sla-sweep` does the same work from cron if
 you would rather schedule it.
 
 ## Development

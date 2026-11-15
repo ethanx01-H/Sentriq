@@ -46,6 +46,32 @@ services:
       timeout: 5s
       retries: 3
 
+  # Daily retention: archive and remove closed tickets older than
+  # RETENTION_DAYS (730 = two years) in bounded batches. It runs one pass at
+  # startup and then every 24 hours; the web app does not depend on it.
+  # Pause it with `docker compose stop retention`; run a dry run with
+  # `docker compose exec -T sentriq python -m sentriq.manage retention`.
+  retention:
+    image: ${SENTRIQ_IMAGE:-sentriq:local}
+    build: .
+    env_file: .env
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATA_DIR: /app/data
+      RETENTION_DAYS: ${RETENTION_DAYS:-730}
+      RETENTION_BATCH_SIZE: ${RETENTION_BATCH_SIZE:-500}
+      RETENTION_INTERVAL_SECONDS: ${RETENTION_INTERVAL_SECONDS:-86400}
+      RETENTION_RETRY_SECONDS: ${RETENTION_RETRY_SECONDS:-300}
+    volumes:
+      # The archive and the evidence files live here; the same host directory
+      # the app mounts, so an archive is visible to both.
+      - ./data:/app/data
+    entrypoint: ["/app/scripts/retention-loop.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:

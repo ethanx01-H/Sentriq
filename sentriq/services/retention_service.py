@@ -1,13 +1,18 @@
 """Archive and remove tickets past the retention window.
 
-The README promises 730 days. This module is what actually enforces it, and it
-is deliberately two-step: the archive is written, read back and counted before
-anything is deleted. A dry run is the default, so a mistyped command cannot
-destroy history — it prints what it would do and exits.
+The README promises 730 days (two years) from closure. This module is what
+enforces it, and it is deliberately two-step: the archive is written, read back
+and counted before anything is deleted. A dry run is the default, so a mistyped
+command cannot destroy history — it prints what it would do and exits.
 
 Archives are gzipped JSON Lines, one object per ticket, containing the ticket,
 its timeline, its evidence metadata (including SHA-256) and its SLA breaches.
-Evidence files are deleted only after that line is safely on disk.
+Evidence files are deleted only after the row deletions have committed, so a
+failed transaction leaves both the rows and the files in place for a retry.
+
+``archive_all`` is the daily entry point. It processes the backlog in bounded
+batches, one transaction per batch, so a first run on a large database does not
+hold one long transaction. ``archive`` is the single-batch primitive.
 """
 
 import gzip
@@ -16,13 +21,17 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
-from ..config import ARCHIVE_DIR, RETENTION_DAYS, UPLOAD_DIR
+from ..config import ARCHIVE_DIR, RETENTION_BATCH_SIZE, RETENTION_DAYS, UPLOAD_DIR
 from ..models import Alert, AlertEvent, AuditLog, Evidence, SlaBreach
 
 logger = logging.getLogger("sentriq.retention")
+
+# A Postgres advisory lock key: only one retention pass may run at a time, even
+# if the daily service is scaled or a cron job overlaps with it.
+RETENTION_LOCK_KEY = 0x5E471
 
 
 def utcnow() -> datetime:
@@ -39,11 +48,28 @@ def closed_reference(alert: Alert) -> datetime | None:
     return alert.closed_at or alert.updated_at or alert.created_at
 
 
-def expired_alerts(db: Session, days: int = RETENTION_DAYS, now: datetime | None = None) -> list[Alert]:
-    """Closed tickets whose retention period has elapsed."""
+def expired_alerts(
+    db: Session,
+    days: int = RETENTION_DAYS,
+    now: datetime | None = None,
+    limit: int | None = None,
+) -> list[Alert]:
+    """Closed tickets whose retention period has elapsed.
+
+    The cutoff is applied by Postgres, not by a Python pass over every closed
+    ticket: the database knows how many rows are older than two years, and
+    loading them all just to compare dates was the slow part.
+    """
     cutoff = retention_cutoff(days, now)
-    closed = db.scalars(select(Alert).where(Alert.status == "Closed")).all()
-    return [alert for alert in closed if (closed_reference(alert) or cutoff) < cutoff]
+    reference = func.coalesce(Alert.closed_at, Alert.updated_at, Alert.created_at)
+    query = (
+        select(Alert)
+        .where(Alert.status == "Closed", reference < cutoff)
+        .order_by(reference, Alert.id)
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return list(db.scalars(query))
 
 
 def serialise_alert(db: Session, alert: Alert) -> dict:
@@ -114,11 +140,18 @@ def archive(
     apply: bool = False,
     now: datetime | None = None,
     archive_dir: Path | None = None,
+    batch_size: int | None = None,
+    batch_index: int = 1,
 ) -> dict:
-    """Write an archive of expired tickets, then (only with ``apply``) delete them."""
+    """Write an archive of expired tickets, then (only with ``apply``) delete them.
+
+    ``batch_size`` bounds how many tickets one call handles. ``archive_all``
+    uses it to keep each transaction short on a large backlog; a manual call
+    without it still processes everything in one go.
+    """
     now = now or utcnow()
     directory = Path(archive_dir or ARCHIVE_DIR)
-    targets = expired_alerts(db, days, now)
+    targets = expired_alerts(db, days, now, limit=batch_size)
     summary = {
         "days": days,
         "cutoff": retention_cutoff(days, now).isoformat(),
@@ -129,13 +162,18 @@ def archive(
         "evidence_bytes": 0,
         "archive": None,
         "applied": False,
+        "unlink_failures": 0,
         "alert_refs": [alert.alert_id for alert in targets],
     }
     if not targets:
         return summary
 
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"alerts-{now.strftime('%Y%m%dT%H%M%SZ')}.jsonl.gz"
+    # Microseconds keep two runs started in the same second from truncating
+    # each other's archive; the batch index separates batches within one run.
+    stamp = now.strftime("%Y%m%dT%H%M%S%fZ")
+    suffix = f"-{batch_index:03d}" if batch_size else ""
+    path = directory / f"alerts-{stamp}{suffix}.jsonl.gz"
 
     records = []
     for alert in targets:
@@ -168,8 +206,7 @@ def archive(
 
     alert_ids = [alert.id for alert in targets]
     evidence_rows = db.scalars(select(Evidence).where(Evidence.alert_id.in_(alert_ids))).all()
-    for item in evidence_rows:
-        (Path(UPLOAD_DIR) / item.stored_name).unlink(missing_ok=True)
+    evidence_paths = [Path(UPLOAD_DIR) / item.stored_name for item in evidence_rows]
 
     db.execute(delete(Evidence).where(Evidence.alert_id.in_(alert_ids)))
     db.execute(delete(SlaBreach).where(SlaBreach.alert_id.in_(alert_ids)))
@@ -186,6 +223,119 @@ def archive(
         ),
     ))
     db.commit()
+
+    # Files are removed only after the row deletions are durable. If the commit
+    # above fails, the rows and the files are both still there, so a later run
+    # can archive the same tickets again instead of leaving an alert whose
+    # evidence has vanished.
+    failures = []
+    for evidence_path in evidence_paths:
+        try:
+            evidence_path.unlink(missing_ok=True)
+        except OSError as error:
+            failures.append((evidence_path, str(error)))
+            logger.error("Could not remove archived evidence %s: %s", evidence_path, error)
+    summary["unlink_failures"] = len(failures)
+    if failures:
+        try:
+            db.add(AuditLog(
+                action="retention.evidence_unlink_failed",
+                target_type="alert_batch",
+                target_id=str(len(failures)),
+                message=(
+                    f"Archived {len(alert_ids)} ticket(s) but could not remove "
+                    f"{len(failures)} evidence file(s): "
+                    + ", ".join(path.name for path, _ in failures[:20])
+                ),
+            ))
+            db.commit()
+        except Exception:
+            logger.exception("Could not record evidence unlink failures in the audit trail")
     summary["applied"] = True
     logger.warning("Retention removed %s archived tickets", len(alert_ids))
     return summary
+
+
+def archive_all(
+    db: Session,
+    days: int = RETENTION_DAYS,
+    apply: bool = True,
+    now: datetime | None = None,
+    archive_dir: Path | None = None,
+    batch_size: int = RETENTION_BATCH_SIZE,
+    max_batches: int = 1000,
+) -> dict:
+    """Archive every expired ticket, one bounded transaction per batch.
+
+    This is the daily entry point. On a large first run it does not hold one
+    transaction over the whole backlog: each batch is archived, verified and
+    committed before the next one starts, so a failure leaves the remaining
+    tickets untouched for the next run.
+
+    A Postgres advisory lock makes overlapping runs (the daily service plus a
+    manual command, or two replicas) a no-op rather than a duplicate deletion.
+    """
+    now = now or utcnow()
+    if not apply:
+        summary = archive(db, days=days, apply=False, now=now, archive_dir=archive_dir)
+        summary.update({"archives": [], "batches": 0, "skipped": False})
+        return summary
+
+    totals = {
+        "days": days,
+        "cutoff": retention_cutoff(days, now).isoformat(),
+        "alerts": 0,
+        "events": 0,
+        "evidence": 0,
+        "sla_breaches": 0,
+        "evidence_bytes": 0,
+        "archives": [],
+        "batches": 0,
+        "unlink_failures": 0,
+        "applied": True,
+        "skipped": False,
+    }
+
+    bind = db.get_bind()
+    lock_connection = bind.connect()
+    try:
+        locked = lock_connection.execute(
+            text("select pg_try_advisory_lock(:key)"), {"key": RETENTION_LOCK_KEY}
+        ).scalar()
+        if not locked:
+            logger.warning("Another retention pass is already running; skipping this one.")
+            totals["applied"] = False
+            totals["skipped"] = True
+            return totals
+
+        for batch in range(1, max_batches + 1):
+            summary = archive(
+                db,
+                days=days,
+                apply=True,
+                now=now,
+                archive_dir=archive_dir,
+                batch_size=batch_size,
+                batch_index=batch,
+            )
+            if not summary["alerts"]:
+                break
+            totals["batches"] = batch
+            for key in ("alerts", "events", "evidence", "sla_breaches", "evidence_bytes", "unlink_failures"):
+                totals[key] += summary.get(key, 0)
+            totals["archives"].append(summary["archive"])
+        else:
+            logger.warning("Retention stopped after %s batches; more expired tickets remain.", max_batches)
+
+        if totals["batches"] == 0:
+            totals["applied"] = False
+        return totals
+    finally:
+        try:
+            lock_connection.execute(
+                text("select pg_advisory_unlock(:key)"), {"key": RETENTION_LOCK_KEY}
+            )
+        except Exception:
+            logger.exception("Could not release the retention advisory lock")
+        finally:
+            lock_connection.close()

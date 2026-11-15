@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from .auth import hash_password, validate_password_strength
-from .config import APP_ENV, AUDIT_OFFHOST_DIR, RETENTION_DAYS
+from .config import APP_ENV, AUDIT_OFFHOST_DIR, RETENTION_BATCH_SIZE, RETENTION_DAYS
 from .models import Alert, AlertEvent, Evidence, SessionLocal, User, engine
 from .services import audit_export as audit_export_service
 from .services import audit_guard as audit_guard_service
@@ -107,12 +107,30 @@ def seed_demo() -> None:
 def run_retention(days: int, apply: bool) -> None:
     """Archive tickets past the retention window; dry run unless --apply."""
     with SessionLocal() as db:
-        summary = retention_service.archive(db, days=days, apply=apply)
+        summary = retention_service.archive_all(db, days=days, apply=apply)
     print(json.dumps(summary, indent=2))
-    if not summary["alerts"]:
+    if summary.get("skipped"):
+        print("Another retention pass is already running; nothing was deleted.")
+    elif not summary["alerts"]:
         print(f"Nothing to archive: no closed tickets older than {days} days.")
     elif not apply:
         print("Dry run: nothing was written or deleted. Re-run with --apply to archive and remove.")
+
+
+def run_retention_daily(days: int, batch_size: int) -> None:
+    """One daily pass: archive and remove everything past the window.
+
+    The pass loops over bounded batches inside ``archive_all`` and takes a
+    Postgres advisory lock, so a cron job and the compose service cannot delete
+    the same tickets at the same time.
+    """
+    with SessionLocal() as db:
+        summary = retention_service.archive_all(db, days=days, apply=True, batch_size=batch_size)
+    print(json.dumps(summary, indent=2))
+    if summary.get("skipped"):
+        print("Another retention pass is already running; nothing was deleted.")
+    elif not summary["alerts"]:
+        print(f"Nothing to archive: no closed tickets older than {days} days.")
 
 
 def run_audit_export(start: str | None, end: str | None, out: str | None, push: bool = False, to_dir: str | None = None) -> None:
@@ -221,6 +239,16 @@ def main() -> None:
     retention.add_argument("--days", type=int, default=RETENTION_DAYS, help=f"Retention window (default {RETENTION_DAYS})")
     retention.add_argument("--apply", action="store_true", help="Write the archive and delete the rows (default is a dry run)")
 
+    daily = commands.add_parser(
+        "retention-daily",
+        help="Archive and remove everything past the retention window in bounded batches (daily job)",
+    )
+    daily.add_argument("--days", type=int, default=RETENTION_DAYS, help=f"Retention window (default {RETENTION_DAYS})")
+    daily.add_argument(
+        "--batch-size", type=int, default=RETENTION_BATCH_SIZE,
+        help=f"Tickets per transaction (default {RETENTION_BATCH_SIZE})",
+    )
+
     export = commands.add_parser("audit-export", help="Write a hash-chained audit export")
     export.add_argument("--from", dest="start", default=None, help="Start timestamp (ISO 8601, UTC)")
     export.add_argument("--to", dest="end", default=None, help="End timestamp (ISO 8601, UTC)")
@@ -251,6 +279,8 @@ def main() -> None:
         seed_demo()
     elif args.command == "retention":
         run_retention(args.days, args.apply)
+    elif args.command == "retention-daily":
+        run_retention_daily(args.days, args.batch_size)
     elif args.command == "audit-export":
         run_audit_export(args.start, args.end, args.out, args.push, args.to_dir)
     elif args.command == "audit-verify":

@@ -197,6 +197,13 @@ if APP_ENV == "production" and WEB_CONCURRENCY > 1 and not REDIS_URL:
 
 # Retention and archival. The README promises 730 days; the job enforces it.
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "730"))
+if RETENTION_DAYS < 1:
+    raise RuntimeError("RETENTION_DAYS must be at least 1 day.")
+# How many expired tickets one transaction handles. The daily job loops over
+# batches, so this bounds transaction length and lock time, not the total.
+RETENTION_BATCH_SIZE = int(os.environ.get("RETENTION_BATCH_SIZE", "500"))
+if RETENTION_BATCH_SIZE < 1:
+    raise RuntimeError("RETENTION_BATCH_SIZE must be at least 1.")
 ARCHIVE_DIR = Path(os.environ.get("ARCHIVE_DIR", str(DATA_DIR / "archive")))
 AUDIT_EXPORT_DIR = Path(os.environ.get("AUDIT_EXPORT_DIR", str(DATA_DIR / "audit-exports")))
 # Where a scheduled export is copied so the anchor is not on the same host as the

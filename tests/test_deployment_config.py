@@ -132,9 +132,18 @@ def test_the_healthcheck_command_works_against_a_live_endpoint():
 
 
 @pytest.mark.parametrize("name", ["main.py", "sentriq/worker.py", "scripts/backup-postgres.sh",
-                                  "scripts/audit-export-offhost.sh", "scripts/verify-restore.sh"])
+                                  "scripts/audit-export-offhost.sh", "scripts/verify-restore.sh",
+                                  "scripts/retention-loop.sh"])
 def test_files_the_image_needs_are_present(name):
     assert (ROOT / name).exists()
+
+
+def test_compose_runs_the_daily_retention_service():
+    """Retention is a deployment concern: without the service, data never expires."""
+    assert "retention:" in COMPOSE
+    assert "/app/scripts/retention-loop.sh" in COMPOSE
+    assert "RETENTION_DAYS: ${RETENTION_DAYS:-730}" in COMPOSE
+    assert "RETENTION_BATCH_SIZE: ${RETENTION_BATCH_SIZE:-500}" in COMPOSE
 
 
 def test_alembic_head_matches_the_newest_migration():
