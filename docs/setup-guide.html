@@ -245,13 +245,15 @@ docker compose version
 sudo -iu sentriq
 git clone https://github.com/ethanx01-H/Sentriq.git /opt/sentriq
 cd /opt/sentriq
-git checkout v1.4.3          <span class="c"># or the tag you intend to run — not `main`</span>
+git fetch --tags
+git tag --list | tail -3      <span class="c"># the releases; pick the newest</span>
+git checkout "$(git describe --tags --abbrev=0)"   <span class="c"># a tag, not `main`</span>
 git log --oneline -1</pre>
 
 <div class="note">
   <span class="lbl">Deploy a tag, not a branch</span>
   A branch moves under you and cannot be rolled back to a known state. If you already publish images
-  from CI, skip the build later and set <code>SENTRIQ_IMAGE=registry.example.com/sentriq:1.4.3</code>
+  from CI, skip the build later and set <code>SENTRIQ_IMAGE=registry.example.com/sentriq:&lt;tag&gt;</code>
   in <code>.env</code> — the compose file prefers it over a local build.
 </div>
 
@@ -390,7 +392,8 @@ also puts a ceiling on memory:</p>
 
 <div class="note">
   <span class="lbl">Why an override file</span>
-  <code>docker-compose.override.yml</code> is merged automatically and stays untracked, so pulling a new
+  <code>docker-compose.override.yml</code> is merged automatically and is already in
+  <code>.gitignore</code>, so pulling a new
   release never conflicts with your host settings. Memory limits matter because without them the kernel
   OOM killer chooses which container dies — and it often chooses Postgres.
 </div>
@@ -512,7 +515,7 @@ docker compose exec -T sentriq python -m sentriq.manage create-admin admin_l3</p
   attribution on old tickets; deletion is refused by design once an account has touched a ticket.
 </div>
 
-<h2><span class="num">12</span>Prove it works — eleven checks</h2>
+<h2><span class="num">12</span>Prove it works — twelve checks</h2>
 <p class="lede">Run these before you tell anyone the system is up. Each one fails loudly if the thing it
 tests is broken.</p>
 
@@ -641,14 +644,15 @@ docker compose exec -T sentriq python -m sentriq.manage audit-verify /app/data/a
 
 <h3>Pull a published image (preferred)</h3>
 <pre>cd /opt/sentriq
-sed -i 's|^# SENTRIQ_IMAGE=.*|SENTRIQ_IMAGE=registry.example.com/sentriq:1.4.4|' .env
+git fetch --tags &amp;&amp; git tag --list | tail -3     <span class="c"># the tag you are moving to</span>
+sed -i 's|^# SENTRIQ_IMAGE=.*|SENTRIQ_IMAGE=registry.example.com/sentriq:&lt;the-new-tag&gt;|' .env
 docker compose pull
 docker compose up -d --no-build
 docker compose logs --tail=40 sentriq</pre>
 
 <h3>Build on the host (when there is no registry yet)</h3>
 <pre>cd /opt/sentriq
-git fetch --tags &amp;&amp; git checkout v1.4.4
+git fetch --tags &amp;&amp; git checkout "$(git describe --tags --abbrev=0)"
 docker compose build
 docker compose up -d
 docker compose logs --tail=40 sentriq</pre>

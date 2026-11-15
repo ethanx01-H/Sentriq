@@ -20,6 +20,10 @@ pgdata/
 .env
 .env.local
 
+# Host-local compose overrides (setup guide, step 08). Merged automatically by
+# compose; kept out of git so a host's own settings never conflict on a pull.
+docker-compose.override.yml
+
 # OS
 .DS_Store
 Thumbs.db
