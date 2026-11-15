@@ -12,6 +12,9 @@ build/
 data/
 !data/.gitkeep
 backups/
+# The compose default bind mount for Postgres. It must never be committed, and
+# more importantly never caught by `git clean -xdf` on the host.
+pgdata/
 
 # Environment
 .env
