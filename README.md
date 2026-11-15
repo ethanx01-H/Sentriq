@@ -8,50 +8,7 @@
 
 A lightweight, self-hosted security operations alert tracker built with FastAPI. Designed for SOC teams that need role-based alert management, an auditable trail, and no vendor lock-in.
 
-## Quick start (local Python demo)
-
-Create a virtual environment and install the app:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-```
-
-Set `APP_SECRET_KEY` in `.env` to a random value of at least 32 characters, then start the app bound to this computer:
-
-```bash
-.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8080
-```
-
-On first startup, database migrations run automatically. In another terminal, create the first administrator:
-
-```bash
-.venv/bin/python -m sentriq.manage create-admin admin_l3
-```
-
-The command prompts you to choose a password. Open `http://127.0.0.1:8080` and sign in as `admin_l3`. A fresh install has no default users or demo tickets; create L1/L2 users from the Users page, then optionally seed synthetic review tickets:
-
-```bash
-.venv/bin/python -m sentriq.manage seed-demo
-```
-
-The seed command is disabled when `APP_ENV=production`. New users have **Require password change at next login** enabled by default; the admin can turn it off in the create-user form. Any signed-in user can later change their own password from **Change password** in the sidebar. Stop the server with `Ctrl+C`.
-
-### Local review accounts
-
-The current local review database has these demo accounts. They are not automatically created on fresh installs.
-
-| Username | Role | Password |
-|---|---|---|
-| `l1` | L1 Analyst | `SocReview2026!` |
-| `l2` | L2 Analyst | `SocReview2026!` |
-| `admin_l3` | L3 Admin | `SocReview2026!` |
-
-Change the shared demo password after signing in. Do not use it outside this localhost demo.
-
-### One command, Postgres included
+## One command, Postgres included
 
 `scripts/demo_local.py` starts a local Postgres, migrates it, copies the demo
 tickets in, takes a snapshot and starts the app with four workers:
@@ -70,6 +27,20 @@ there is a development bundle, not a server to run in production; it is only
 there so the demo exercises the same SQL as production. Postgres refuses to
 initialise a cluster on a Windows drvfs mount such as `/mnt/d` under WSL, which
 is why the state directory is outside the repository.
+
+### Local review accounts
+
+The demo database has these accounts. They are not created on a fresh install
+outside the demo.
+
+| Username | Role | Password |
+|---|---|---|
+| `l1` | L1 Analyst | `SocReview2026!` |
+| `l2` | L2 Analyst | `SocReview2026!` |
+| `admin_l3` | L3 Admin | `SocReview2026!` |
+
+Change the shared demo password after signing in. Do not use it outside this
+localhost demo.
 
 ## Quick start (Docker)
 
@@ -719,17 +690,22 @@ you would rather schedule it.
 
 ## Development
 
-For local development without Docker:
+For local development without Docker, use the bundled demo above, or point
+`DATABASE_URL` at a Postgres you run yourself:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+# set DATABASE_URL, APP_SECRET_KEY, ALLOWED_HOSTS and TRUSTED_PROXIES
+# (or use the APP_ENV=review values) in .env
 uvicorn main:app --reload --port 8080
 ```
 
-The `--reload` flag auto-restarts on code changes. Do not use `--reload` in production.
+The app has no SQLite mode: `DATABASE_URL` must be a Postgres URL. Migrations
+run at startup. The `--reload` flag auto-restarts on code changes; do not use it
+in production.
 
 ## Tech stack
 
