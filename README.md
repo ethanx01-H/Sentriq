@@ -6,7 +6,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)
 
 
-A lightweight, self-hosted security operations alert tracker built with FastAPI. Designed for SOC teams that need role-based alert management and a straightforward way to bring Elastic SIEM alerts in — without vendor lock-in.
+A lightweight, self-hosted security operations alert tracker built with FastAPI. Designed for SOC teams that need role-based alert management, an auditable trail, and no vendor lock-in.
 
 ## Quick start (local Python demo)
 
@@ -514,16 +514,6 @@ source IP are keyed on. Find the Docker bridge gateway with:
 docker network inspect sentriq_default -f '{{ (index .IPAM.Config 0).Gateway }}'
 ```
 
-### Elastic JSON import
-
-Paste raw Elastic alert JSON directly into the tracker. Supported shapes:
-
-- Raw Elastic hits with `_source`
-- `hits.hits` search responses
-- Plain JSON objects with ECS or Kibana alert fields
-
-The parser extracts title, description, source, severity, asset, MITRE tactic, and IOCs automatically.
-
 ## Configuration
 
 All settings are controlled via environment variables. See `.env.example` for the full list.
@@ -628,7 +618,6 @@ pip-audit -r requirements.txt
 ```
 
 Test coverage includes:
-- Elastic/Kibana JSON parser (43 tests)
 - Authentication and RBAC permissions (41 tests)
 - Alert service business logic (19 tests)
 - Retention archival and audit-export chain verification
@@ -664,7 +653,7 @@ It drops and recreates the `public` schema, runs the real migrations to head, an
 - ~~External integrations for notifications~~ ✅ Done (email and Teams)
 - Trend charts for weekly and monthly reporting
 - Evidence tagging and per-evidence retention
-- API documentation page with example payloads for Elastic imports
+- API documentation page with example payloads for inbound ingest
 - OpenTelemetry traces for slow dashboard queries at scale
 
 ## Contributing

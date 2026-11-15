@@ -1,17 +1,14 @@
-"""Importing the same Elastic export twice must not double the tickets.
+"""Re-importing the same external document must not double the tickets.
 
-The import page keeps the Elastic ``_id`` on each ticket as ``external_id``, so a
-pasted export that is imported again maps onto the tickets that already exist
-instead of creating a second set. That behaviour used to be covered through the
-removed n8n webhook; it is exercised here through the same service the import
-page calls.
+Nothing in the UI ingests Elastic exports any more, but create_or_get_alert
+still deduplicates on external_id, and the unique index on that column is what
+makes two workers importing at once safe. These tests keep that behaviour
+honest, because the next thing to feed this app (a SIEM API, a playbook) will
+lean on it.
 """
-
-import json
 
 import pytest
 
-from alerts.elastic import parse_elastic_alerts
 from sentriq.models import Alert
 from sentriq.services.alert_service import create_or_get_alert
 from tests.support import make_session_factory
@@ -24,25 +21,24 @@ def db(engine):
     session.close()
 
 
-def export(doc_ids):
-    hits = []
-    for doc_id in doc_ids:
-        hit = {
-            "_index": "logs-endpoint",
-            "_source": {
-                "kibana.alert.rule.name": "Suspicious PowerShell",
-                "kibana.alert.severity": "high",
-                "host.name": "WS-042",
-            },
-        }
-        if doc_id is not None:
-            hit["_id"] = doc_id
-        hits.append(hit)
-    return parse_elastic_alerts(json.dumps({"hits": {"hits": hits}}))
+def record(external_id, title="Suspicious PowerShell", asset="WS-042"):
+    values = {
+        "title": title,
+        "description": "",
+        "severity": "High",
+        "asset": asset,
+        "tactic": "Execution",
+        "iocs": [],
+        "sla_hours": 8,
+        "source": "logs-endpoint",
+    }
+    if external_id is not None:
+        values["external_id"] = external_id
+    return values
 
 
-def import_export(db, records):
-    """What the import page does: one loop, one commit, duplicates counted."""
+def import_records(db, records):
+    """One loop, one commit, duplicates counted — the shape an ingest path has."""
     created = skipped = 0
     for item in records:
         _, is_new = create_or_get_alert(db, dict(item))
@@ -55,32 +51,31 @@ def import_export(db, records):
 
 
 def test_replay_returns_the_existing_ticket(db):
-    assert import_export(db, export(["elastic-doc-abc123"])) == (1, 0)
+    assert import_records(db, [record("logs-endpoint:doc-abc123")]) == (1, 0)
 
-    assert import_export(db, export(["elastic-doc-abc123"])) == (0, 1)
+    assert import_records(db, [record("logs-endpoint:doc-abc123")]) == (0, 1)
 
     assert db.query(Alert).count() == 1
-    stored = db.query(Alert).one()
-    assert stored.external_id == "logs-endpoint:elastic-doc-abc123"
+    assert db.query(Alert).one().external_id == "logs-endpoint:doc-abc123"
 
 
-def test_distinct_elastic_documents_still_create_new_tickets(db):
-    import_export(db, export(["doc-1"]))
-    import_export(db, export(["doc-2"]))
+def test_distinct_documents_still_create_new_tickets(db):
+    import_records(db, [record("logs-endpoint:doc-1")])
+    import_records(db, [record("logs-endpoint:doc-2")])
     assert db.query(Alert).count() == 2
 
 
-def test_export_without_an_identifier_cannot_be_deduplicated(db):
-    # Nothing to match on: two imports are two tickets, which is why the
-    # Elastic _id is preserved rather than dropped.
-    import_export(db, export([None]))
-    import_export(db, export([None]))
+def test_a_record_without_an_identifier_cannot_be_deduplicated(db):
+    # Nothing to match on: two ingests are two tickets, which is why the source
+    # identifier is kept rather than dropped.
+    import_records(db, [record(None)])
+    import_records(db, [record(None)])
     assert db.query(Alert).count() == 2
     assert db.query(Alert).filter(Alert.external_id.isnot(None)).count() == 0
 
 
-def test_mixed_export_reports_created_and_skipped(db):
-    import_export(db, export(["doc-1"]))
-    created, skipped = import_export(db, export(["doc-1", "doc-2"]))
+def test_mixed_batch_reports_created_and_skipped(db):
+    import_records(db, [record("logs-endpoint:doc-1")])
+    created, skipped = import_records(db, [record("logs-endpoint:doc-1"), record("logs-endpoint:doc-2")])
     assert (created, skipped) == (1, 1)
     assert db.query(Alert).count() == 2

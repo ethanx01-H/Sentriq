@@ -179,16 +179,18 @@ def test_close_and_audit_trail(client, pg_sessions, pg_engine):
 
 
 def test_import_deduplicates_on_postgres(pg_engine, pg_sessions):
-    """A repeated Elastic export must map to the ticket it already created."""
-    from alerts.elastic import parse_elastic_alerts
+    """A repeated external document must map to the ticket it already created."""
     from sentriq.services.alert_service import create_or_get_alert
-
-    raw = '{"hits": {"hits": [{"_index": "logs", "_id": "pg-doc-1", "_source": {"alert_name": "Postgres import alert"}}]}}'
 
     def import_once():
         session = pg_sessions()
         try:
-            first, created = create_or_get_alert(session, dict(parse_elastic_alerts(raw)[0]))
+            values = {
+                "title": "Postgres import alert", "description": "", "severity": "High",
+                "asset": "WS-042", "tactic": "Execution", "iocs": [], "sla_hours": 8,
+                "source": "logs-endpoint", "external_id": "logs:pg-doc-1",
+            }
+            first, created = create_or_get_alert(session, values)
             session.commit()
             return first.alert_id, created
         finally:

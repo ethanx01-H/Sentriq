@@ -23,7 +23,7 @@ from sentriq.config import (
 )
 from sentriq.middleware import security_middleware
 from sentriq.models import Base, engine
-from sentriq.routes import auth_routes, alert_routes, admin_routes, evidence_routes, metrics_routes, elastic_routes
+from sentriq.routes import auth_routes, alert_routes, admin_routes, evidence_routes, metrics_routes
 from sentriq.services import backup_status
 
 # Configure logging
@@ -58,7 +58,6 @@ app.include_router(alert_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(evidence_routes.router)
 app.include_router(metrics_routes.router)
-app.include_router(elastic_routes.router)
 
 
 @app.get("/healthz", include_in_schema=False)
