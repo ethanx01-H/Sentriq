@@ -141,3 +141,43 @@ def test_alembic_head_matches_the_newest_migration():
     """A stale ALEMBIC_HEAD makes startup skip the migration it should run."""
     versions = sorted(path.stem for path in (ROOT / "alembic" / "versions").glob("0*.py"))
     assert versions[-1] == config.ALEMBIC_HEAD
+
+
+# ---------------------------------------------------------------- releases
+
+CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+RELEASE = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+
+
+def test_production_can_pull_an_image_instead_of_building_one():
+    """A CVE patch must not need PyPI access from the database server."""
+    assert "${SENTRIQ_IMAGE:-sentriq:local}" in COMPOSE
+    assert "SENTRIQ_IMAGE=" in ENV_EXAMPLE
+
+
+def test_a_release_is_scanned_before_it_is_published():
+    assert 'tags: ["v*"]' in RELEASE
+    assert RELEASE.index("Scan the image") < RELEASE.index("docker push"), (
+        "the image is published before the scan that is supposed to gate it"
+    )
+    assert 'exit-code: "1"' in RELEASE
+
+
+def test_a_release_carries_an_sbom():
+    """Answering "are we affected by CVE-x" needs the package list of the image
+    that is actually running, not of the commit."""
+    assert "cyclonedx" in RELEASE
+    assert "upload-artifact" in RELEASE
+
+
+def test_ci_rebuilds_on_a_schedule():
+    """A weekly run with no code change is how a base-image CVE becomes a red
+    build before it becomes an incident."""
+    assert "schedule:" in CI
+    assert "cron:" in CI
+
+
+def test_the_air_gap_export_writes_a_checksum():
+    text = (ROOT / "scripts" / "save-image.sh").read_text()
+    assert "docker save" in text
+    assert "sha256sum" in text, "an image carried on removable media needs a checksum"

@@ -188,7 +188,9 @@ powershell -Command "cd D:\IT\automation_script\Sentriq; docker compose exec -T 
 Test the restore path, not just the backup: restore a snapshot into a scratch database at
 least once a quarter and compare row counts. A backup nobody has restored is a guess.
 
-Updating is then just:
+Updating is then just a rebuild — but see [Upgrading and patching a CVE](#upgrading-and-patching-a-cve),
+which recommends pulling a published image instead of building on the host that holds the
+database.
 
 ```bash
 docker compose down
@@ -292,6 +294,100 @@ python -m sentriq.manage sla-sweep       # record newly missed SLAs
 ```
 
 Schedule retention, the audit export and the SLA sweep from cron (or Windows Task Scheduler), and alert on `soc_backup_stale`, `soc_backup_age_seconds` and `soc_sla_breaches{state="open"}`. Set `TRUSTED_PROXIES` to the addresses of your reverse proxy so lockouts, rate limits, and audit rows key on the real client address rather than the proxy.
+
+## Upgrading and patching a CVE
+
+Three ways to update this deployment, best first. The difference matters most on the day a
+CVE lands and the change window is short.
+
+### 1. Pull a published image (recommended)
+
+CI builds and scans; production only pulls. Nothing is compiled on the host that holds the
+database, so a patch does not depend on PyPI or Docker Hub being reachable from it.
+
+```bash
+# .env on the host, once
+SENTRIQ_IMAGE=registry.aya.com.mm/sentriq:1.4.3
+```
+
+```bash
+docker compose pull
+docker compose up -d --no-build    # entrypoint: snapshot -> alembic upgrade head -> gunicorn
+docker compose logs -f sentriq     # watch the migration, then Ctrl-C
+curl -fsS http://127.0.0.1:8080/healthz
+```
+
+Rolling back is the same two commands with the previous tag in `SENTRIQ_IMAGE`. The old image
+is still on the host, so a rollback takes seconds and does not need a network.
+
+Publishing is triggered by a tag:
+
+```bash
+git tag -a v1.4.3 -m "Sentriq 1.4.3"
+git push origin v1.4.3
+```
+
+`.github/workflows/release.yml` builds it, refuses to publish if Trivy finds HIGH or CRITICAL,
+pushes it, and attaches a CycloneDX SBOM to the run. Point it at your registry with the
+repository variable `SENTRIQ_IMAGE` (defaults to `ghcr.io/<owner>/<repo>`) and, for anything
+other than ghcr.io, the secrets `REGISTRY_USERNAME` / `REGISTRY_PASSWORD`.
+
+### 2. Carry an image across an air gap
+
+When the production network cannot reach a registry at all:
+
+```bash
+./scripts/save-image.sh sentriq:1.4.3 /media/transfer    # on a host that can build or pull
+
+# on the production host
+sha256sum -c sentriq_1.4.3.tar.gz.sha256
+gunzip -c sentriq_1.4.3.tar.gz | docker load
+SENTRIQ_IMAGE=sentriq:1.4.3 docker compose up -d --no-build
+```
+
+The checksum is not decoration: an image carried on removable media and loaded without one is
+an unverified binary running as the SOC's system of record.
+
+### 3. Build on the host from git (last resort)
+
+```bash
+git fetch --tags && git pull --ff-only
+docker compose build && docker compose up -d
+```
+
+This needs PyPI and Docker Hub from the production host. Acceptable on a lab machine, wrong on
+a database server, and the first thing to fail in a restricted network.
+
+### When a CVE lands
+
+Almost everything a scanner finds in this image is in the Alpine base or a pinned Python
+package, not in Sentriq's own code — the 16 HIGH findings from the first image build were all
+`krb5-libs` from the base image. So the patch is usually a rebuild, not a code change:
+
+1. **Confirm exposure.** The CI workflow also runs weekly (`schedule` in `ci.yml`) with no code
+   change, rebuilding from the current base image. A base-image CVE therefore turns the build
+   red before it becomes an incident. Check the SBOM attached to the running release to see
+   whether the affected package is even present.
+2. **Bump the pin.** Either the base image line in the `Dockerfile` or the affected package in
+   `requirements.txt`. `apk upgrade` in the Dockerfile picks up base-image fixes on every build.
+3. **Let CI decide.** Push to `main`; the scan gates the build.
+4. **Tag and deploy.** `v1.4.4`, then `docker compose pull && docker compose up -d --no-build`.
+
+Do not skip step 1 by rebuilding the same commit and calling it patched: if the pin did not
+move, the bytes did not change.
+
+### What not to do
+
+- **Do not deploy `main`.** Deploy tags. Otherwise the next `git pull` ships whatever was
+  merged last, including work that has nothing to do with the patch.
+- **Do not edit tracked files on the host** (`docker-compose.yml`, `nginx.conf`, `alembic.ini`).
+  The next pull refuses to overwrite them. Put host-specific settings in `.env` or an untracked
+  `docker-compose.override.yml`.
+- **Do not take a snapshot for granted.** The entrypoint skips a backup newer than five minutes
+  (`BACKUP_MIN_INTERVAL`), so run `pg_dump` yourself before a migration you are unsure about.
+- **Do not rely on `alembic downgrade` alone.** All eleven migrations have a real `downgrade()`,
+  but it drops the columns the newer version added. The pre-upgrade dump is the guarantee; the
+  downgrade is the fast path.
 
 ## Database
 

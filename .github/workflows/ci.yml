@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A weekly run with no code change is the early warning: it rebuilds from the
+  # current base image and rescans, so a CVE in Alpine or in a pinned dependency
+  # shows up as a red build before it is an incident, not during one.
+  schedule:
+    - cron: "0 2 * * 1"
   workflow_dispatch:
 
 permissions:

@@ -1,7 +1,10 @@
 services:
   sentriq:
     build: .
-    image: sentriq:local
+    # Overridable so production can run a published image instead of a local
+    # build: SENTRIQ_IMAGE=registry.aya.com.mm/sentriq:1.4.3 docker compose pull
+    # followed by `up -d --no-build`. Without it, a local build keeps working.
+    image: ${SENTRIQ_IMAGE:-sentriq:local}
     env_file: .env
     environment:
       # Production by default: the guards in sentriq/config.py refuse a

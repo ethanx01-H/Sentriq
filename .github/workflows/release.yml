@@ -1,0 +1,105 @@
+name: Release
+
+# Building is CI's job, not production's. A tagged commit is built once, scanned,
+# and published to a registry; the host only pulls. That is what makes a CVE
+# patch a ten-minute change window instead of a build that needs PyPI access from
+# a database server.
+#
+# Set the repository variable SENTRIQ_IMAGE to the published name without a tag
+# (e.g. registry.aya.com.mm/sentriq). It defaults to ghcr.io/<owner>/<repo>.
+# For a registry other than ghcr.io, set the secrets REGISTRY_USERNAME and
+# REGISTRY_PASSWORD; ghcr.io uses the workflow's own token.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit or tag to release"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    name: Build, scan and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Resolve the image name
+        run: |
+          set -eu
+          name="${SENTRIQ_IMAGE:-ghcr.io/${GITHUB_REPOSITORY}}"
+          name=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
+          tag="${{ inputs.ref || github.ref_name }}"
+          case "$tag" in v*) ;; *) tag="v$tag" ;; esac
+          echo "IMAGE_NAME=$name" >> "$GITHUB_ENV"
+          echo "IMAGE=$name:$tag" >> "$GITHUB_ENV"
+          echo "VERSION=$tag" >> "$GITHUB_ENV"
+          echo "publishing $name:$tag"
+        env:
+          SENTRIQ_IMAGE: ${{ vars.SENTRIQ_IMAGE }}
+
+      - name: Build
+        run: |
+          docker build \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            -t "${IMAGE}" .
+
+      # Nothing is published until it passes. The scan is the gate, not a report.
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Write the SBOM
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: cyclonedx
+          output: sentriq-${{ env.VERSION }}.cdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ env.VERSION }}
+          path: sentriq-${{ env.VERSION }}.cdx.json
+          retention-days: 365
+
+      - name: Log in
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          user="${REGISTRY_USERNAME:-${GITHUB_ACTOR}}"
+          pass="${REGISTRY_PASSWORD:-${GH_TOKEN}}"
+          printf '%s' "$pass" | docker login "${IMAGE_NAME%%/*}" -u "$user" --password-stdin
+
+      - name: Push
+        run: docker push "${IMAGE}"
+
+      - name: Record the digest
+        run: |
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "${IMAGE}")
+          {
+            echo "### Published"
+            echo ""
+            echo '```'
+            echo "$digest"
+            echo '```'
+            echo ""
+            echo "Pin this in .env on the host: SENTRIQ_IMAGE=${IMAGE}"
+          } >> "$GITHUB_STEP_SUMMARY"
