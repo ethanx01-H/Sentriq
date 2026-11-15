@@ -8,6 +8,11 @@
 
 A lightweight, self-hosted security operations alert tracker built with FastAPI. Designed for SOC teams that need role-based alert management, an auditable trail, and no vendor lock-in.
 
+For a step-by-step install on a clean Linux host — SSH hardening, firewall,
+Docker, DNS and TLS, the database, backups, retention, and rollback — open
+[docs/setup-guide.html](docs/setup-guide.html) in a browser.
+
+
 ## One command, Postgres included
 
 `scripts/demo_local.py` starts a local Postgres, migrates it, copies the demo

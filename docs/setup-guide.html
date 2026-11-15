@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentriq — clean install on a Linux host</title>
+<style>
+  :root{
+    --bg:#0f141b; --panel:#151c25; --panel-strong:#1b2430; --field:#0b1017;
+    --text:#edf2f7; --muted:#a9b7c6; --line:#2c3847;
+    --primary:#4c8dff; --accent:#0f766e;
+    --ok:#3fb950; --warn:#f6c453; --bad:#ff8a80;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg); color:var(--text);
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:15px; line-height:1.65; letter-spacing:.1px}
+  .wrap{max-width:1000px; margin:0 auto; padding:48px 24px 96px}
+  header.top{border-bottom:1px solid var(--line); padding-bottom:28px; margin-bottom:8px}
+  .eyebrow{color:var(--accent); font-size:11px; font-weight:600; letter-spacing:.18em; text-transform:uppercase; margin:0 0 10px}
+  h1{font-size:30px; line-height:1.25; margin:0 0 10px; font-weight:650; letter-spacing:-.4px}
+  h1 span{color:var(--muted); font-weight:400}
+  .meta{color:var(--muted); font-size:13px; display:flex; flex-wrap:wrap; gap:6px 18px}
+  .meta b{color:var(--text); font-weight:500}
+  h2{font-size:18px; margin:56px 0 4px; font-weight:600; letter-spacing:-.1px;
+     padding-top:18px; border-top:1px solid var(--line)}
+  h2 .num{color:var(--accent); font-variant-numeric:tabular-nums; margin-right:10px; font-size:13px; font-weight:700}
+  .lede{color:var(--muted); font-size:14px; margin:6px 0 20px; max-width:78ch}
+  h3{font-size:13.5px; margin:26px 0 8px; font-weight:600; color:var(--text)}
+  h3 .k{color:var(--muted); font-weight:500}
+  p{margin:0 0 14px}
+  .muted{color:var(--muted)}
+  code{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace; font-size:12.5px;
+    background:rgba(76,141,255,.1); border-radius:4px; padding:1px 5px; color:var(--text)}
+  pre{background:var(--field); border:1px solid var(--line); border-left:2px solid var(--primary);
+    border-radius:8px; padding:14px 16px; overflow-x:auto; margin:10px 0 16px;
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    font-size:12.5px; line-height:1.7; color:#dbe4ef; -webkit-overflow-scrolling:touch}
+  pre .c{color:#6b7f96}
+  pre .p{color:var(--ok)}
+  .verify{background:rgba(63,185,80,.06); border:1px solid rgba(63,185,80,.28); border-left:2px solid var(--ok);
+    border-radius:8px; padding:12px 16px; margin:0 0 18px; font-size:13px}
+  .verify .lbl{display:block; font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ok); font-weight:700; margin-bottom:6px}
+  .verify pre{background:transparent; border:none; padding:0; margin:6px 0 0; font-size:12px; color:#c9e8cf}
+  .warnbox{background:rgba(246,196,83,.06); border:1px solid rgba(246,196,83,.28); border-left:2px solid var(--warn);
+    border-radius:8px; padding:14px 16px; margin:16px 0; font-size:13.5px}
+  .warnbox .lbl{display:block; font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--warn); font-weight:700; margin-bottom:6px}
+  .danger{background:rgba(255,107,107,.06); border:1px solid rgba(255,107,107,.3); border-left:2px solid #ff6b6b}
+  .danger .lbl{color:#ff6b6b}
+  .note{background:rgba(76,141,255,.06); border:1px solid rgba(76,141,255,.25); border-left:2px solid var(--primary);
+    border-radius:8px; padding:14px 16px; margin:16px 0; font-size:13.5px}
+  .note .lbl{display:block; font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--primary); font-weight:700; margin-bottom:6px}
+
+  .facts{display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin:24px 0 0}
+  .fact{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:13px 15px}
+  .fact .k{color:var(--muted); font-size:10.5px; text-transform:uppercase; letter-spacing:.1em; margin-bottom:3px}
+  .fact .v{font-size:14px; font-weight:600}
+
+  .flow{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:20px 22px; margin:18px 0 0}
+  .flow .line{display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12.5px; color:var(--muted)}
+  .flow .box{background:var(--panel-strong); border:1px solid var(--line); border-radius:7px;
+    padding:7px 11px; color:var(--text); font-weight:500; white-space:nowrap}
+  .flow .box small{display:block; color:var(--muted); font-weight:400; font-size:10.5px; margin-top:1px}
+  .flow .arw{color:var(--muted); font-size:14px}
+  .flow .row2{margin-top:10px; padding-top:10px; border-top:1px dashed var(--line)}
+
+  ul.plain{margin:8px 0 16px; padding-left:20px}
+  ul.plain li{margin-bottom:7px; font-size:13.5px}
+  ul.plain li b{font-weight:600}
+  ul.plain li span{color:var(--muted)}
+  ol.plain{margin:8px 0 16px; padding-left:20px}
+  ol.plain li{margin-bottom:7px; font-size:13.5px}
+
+  .check{list-style:none; padding:0; margin:14px 0 0; display:grid; gap:8px}
+  .check li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 14px}
+  .check li::before{content:""; flex:0 0 auto; width:14px; height:14px; margin-top:3px;
+    border:1.5px solid var(--muted); border-radius:3px}
+
+  .tablewrap{overflow-x:auto}
+  table{width:100%; border-collapse:collapse; font-size:13.5px; margin-top:6px; min-width:520px}
+  th{text-align:left; color:var(--muted); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
+    font-weight:600; padding:0 12px 10px 0; border-bottom:1px solid var(--line)}
+  td{padding:11px 12px 11px 0; border-bottom:1px solid rgba(44,56,71,.55); vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.k{color:var(--text); font-weight:500; white-space:nowrap}
+  td.mono{font-family:ui-monospace,monospace; font-size:12.5px}
+
+  footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); color:var(--muted); font-size:12px}
+  @media (max-width:700px){ pre{font-size:11.5px} h1{font-size:24px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <p class="eyebrow">Setup guide</p>
+  <h1>Sentriq on a clean Linux host <span>· step by step</span></h1>
+  <div class="meta">
+    <span>Ubuntu 24.04 LTS</span>
+    <span>Docker Compose</span>
+    <span>~45 minutes</span>
+    <span>every step has a check you can run</span>
+  </div>
+</header>
+
+<p class="lede" style="margin-top:24px">
+  This is the build order that produces a deployment you can hand to an auditor: hardened host,
+  key-only access, a real domain and certificate, the database on UTC, backups that run on a schedule
+  and a restore that has actually been tried. Follow it top to bottom — later steps read values
+  produced by earlier ones.
+</p>
+
+<div class="facts">
+  <div class="fact"><div class="k">Host</div><div class="v">2 vCPU · 2 GB RAM</div></div>
+  <div class="fact"><div class="k">Disk</div><div class="v">25 GB SSD</div></div>
+  <div class="fact"><div class="k">OS</div><div class="v">Ubuntu 24.04 LTS</div></div>
+  <div class="fact"><div class="k">Also needed</div><div class="v">A domain you control</div></div>
+</div>
+
+<div class="warnbox">
+  <span class="lbl">Before you start</span>
+  You need four things: a fresh Ubuntu 24.04 server you can SSH into, an <b>SSH key pair</b> on your
+  laptop (not a password), a <b>domain or subdomain</b> you can add a DNS record for, and 45 minutes.
+  A 1 GB server will run it, but Postgres plus a rebuild on the same box wants 2 GB.
+</div>
+
+<h2><span class="num">00</span>What you are building</h2>
+<p class="lede">One host, one compose project, no published app port. The database and the app talk over
+a private Docker bridge; only nginx is reachable from outside.</p>
+
+<div class="flow">
+  <div class="line">
+    <span class="box">Analyst browser<small>https only</small></span>
+    <span class="arw">→</span>
+    <span class="box">Cloud firewall<small>22 / 80 / 443</small></span>
+    <span class="arw">→</span>
+    <span class="box">nginx<small>TLS + rate limit</small></span>
+    <span class="arw">→</span>
+    <span class="box">127.0.0.1:8080<small>loopback only</small></span>
+  </div>
+  <div class="line row2">
+    <span class="box">sentriq<small>gunicorn · 1 worker</small></span>
+    <span class="arw">→</span>
+    <span class="box">postgres:16<small>TZ=UTC</small></span>
+    <span class="arw">·</span>
+    <span class="box">retention<small>daily archive</small></span>
+    <span class="arw">→</span>
+    <span class="box">host bind mounts<small>data / backups / pgdata</small></span>
+  </div>
+</div>
+
+<h2><span class="num">01</span>Harden SSH before anything else</h2>
+<p class="lede">A new server is being scanned within minutes. Do this first, and keep your current
+session open until the new one is proven.</p>
+
+<h3>1.1 Create a service account</h3>
+<pre>adduser --disabled-password --gecos "" sentriq
+usermod -aG sudo sentriq
+mkdir -p /home/sentriq/.ssh
+cp /root/.ssh/authorized_keys /home/sentriq/.ssh/authorized_keys
+chown -R sentriq:sentriq /home/sentriq/.ssh
+chmod 700 /home/sentriq/.ssh &amp;&amp; chmod 600 /home/sentriq/.ssh/authorized_keys</pre>
+
+<div class="verify">
+  <span class="lbl">Check — from your laptop, in a new terminal</span>
+  <pre>ssh sentriq@YOUR_SERVER_IP 'sudo -n true &amp;&amp; echo "key login + sudo OK"'</pre>
+  Do not continue until this prints <code>key login + sudo OK</code>. Closing the root session before
+  this works locks you out.
+</div>
+
+<h3>1.2 Turn off password and root login</h3>
+<pre>sudo tee /etc/ssh/sshd_config.d/99-hardening.conf &gt;/dev/null &lt;&lt;'EOF'
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+MaxAuthTries 3
+X11Forwarding no
+EOF
+sudo sshd -t &amp;&amp; sudo systemctl reload ssh</pre>
+
+<div class="verify">
+  <span class="lbl">Check</span>
+  <pre>sudo sshd -T | grep -E '^(permitrootlogin|passwordauthentication)'
+<span class="c"># permitrootlogin no</span>
+<span class="c"># passwordauthentication no</span></pre>
+</div>
+
+<h2><span class="num">02</span>Firewall, brute-force protection, patches</h2>
+
+<pre>sudo apt update &amp;&amp; sudo apt -y upgrade
+sudo apt -y install ufw fail2ban unattended-upgrades curl ca-certificates
+
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw --force enable</pre>
+
+<p>fail2ban with a stricter jail than the default:</p>
+<pre>sudo tee /etc/fail2ban/jail.d/sshd.local &gt;/dev/null &lt;&lt;'EOF'
+[sshd]
+enabled  = true
+maxretry = 4
+findtime = 10m
+bantime  = 1h
+EOF
+sudo systemctl enable --now fail2ban</pre>
+
+<div class="verify">
+  <span class="lbl">Check</span>
+  <pre>sudo ufw status | head -8
+sudo fail2ban-client status sshd | head -4
+sudo systemctl is-enabled unattended-upgrades   <span class="c"># enabled</span></pre>
+</div>
+
+<div class="note">
+  <span class="lbl">Why ufw is safe with Docker</span>
+  Docker publishes ports by writing its own iptables rules that bypass ufw. That only matters for ports
+  published on <code>0.0.0.0</code>. Sentriq publishes <code>127.0.0.1:8080</code>, so nothing can be
+  exposed behind ufw's back — which is why the loopback bind in the compose file is not a nicety.
+</div>
+
+<h2><span class="num">03</span>Install Docker</h2>
+<pre>curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker sentriq</pre>
+
+<div class="verify">
+  <span class="lbl">Check — log out and back in first, so the group applies</span>
+  <pre>docker version --format '{{.Server.Version}}'
+docker compose version
+<span class="c"># a version number, then v2.x or newer</span></pre>
+</div>
+
+<h2><span class="num">04</span>Get the code onto the host</h2>
+<p>Run everything from a fixed path. <code>/opt/sentriq</code> is used here and in every later step.</p>
+
+<pre>sudo mkdir -p /opt/sentriq &amp;&amp; sudo chown sentriq:sentriq /opt/sentriq
+sudo -iu sentriq
+git clone https://github.com/ethanx01-H/Sentriq.git /opt/sentriq
+cd /opt/sentriq
+git checkout v1.4.3          <span class="c"># or the tag you intend to run — not `main`</span>
+git log --oneline -1</pre>
+
+<div class="note">
+  <span class="lbl">Deploy a tag, not a branch</span>
+  A branch moves under you and cannot be rolled back to a known state. If you already publish images
+  from CI, skip the build later and set <code>SENTRIQ_IMAGE=registry.example.com/sentriq:1.4.3</code>
+  in <code>.env</code> — the compose file prefers it over a local build.
+</div>
+
+<h2><span class="num">05</span>DNS and the certificate</h2>
+<p>Point the record first; certificate issuance fails until DNS resolves.</p>
+
+<pre><span class="c"># at your DNS provider: an A record for the host you will serve</span>
+sentriq.example.com.   A   YOUR_SERVER_IP</pre>
+
+<div class="verify">
+  <span class="lbl">Check — wait until this returns your server IP</span>
+  <pre>dig +short sentriq.example.com</pre>
+</div>
+
+<p>Install nginx, then serve only the ACME challenge so certbot can validate while nginx stays up —
+this is what makes renewals work without stopping the web server.</p>
+
+<pre>sudo apt -y install nginx certbot
+sudo mkdir -p /var/www/certbot
+
+sudo tee /etc/nginx/sites-available/sentriq &gt;/dev/null &lt;&lt;'EOF'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sentriq.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+EOF
+sudo ln -sf /etc/nginx/sites-available/sentriq /etc/nginx/sites-enabled/sentriq
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t &amp;&amp; sudo systemctl reload nginx
+
+sudo certbot certonly --webroot -w /var/www/certbot -d sentriq.example.com \
+  --agree-tos -m soc@example.com --no-eff-email</pre>
+
+<div class="verify">
+  <span class="lbl">Check</span>
+  <pre>sudo ls /etc/letsencrypt/live/sentriq.example.com/
+<span class="c"># cert.pem  chain.pem  fullchain.pem  privkey.pem</span>
+sudo systemctl list-timers | grep certbot   <span class="c"># renewal is scheduled</span></pre>
+</div>
+
+<h2><span class="num">06</span>Start Postgres first — you need its gateway address</h2>
+<p>The app refuses to start in production without <code>TRUSTED_PROXIES</code>, and that value is the
+Docker bridge gateway, which does not exist until the network is created. So: bring up the database,
+read the gateway, then write the rest of <code>.env</code>.</p>
+
+<pre>cd /opt/sentriq
+mkdir -p data backups
+chown -R 100:101 data backups        <span class="c"># the container runs as uid 100</span>
+chmod 750 data backups
+
+cp .env.example .env &amp;&amp; chmod 600 .env
+
+<span class="c"># generate the database password now and keep it — step 07 must use the same value</span>
+DB_PW=$(openssl rand -hex 24); echo "POSTGRES_PASSWORD=$DB_PW"
+sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$DB_PW|" .env
+
+docker compose up -d postgres
+docker network inspect sentriq_default \
+  -f '{{ (index .IPAM.Config 0).Gateway }}'</pre>
+
+<div class="verify">
+  <span class="lbl">Check — note the address, you need it next</span>
+  <pre>docker compose ps postgres
+<span class="c"># sentriq-postgres-1  ...  Up (healthy)  5432/tcp</span>
+<span class="c"># gateway, typically 172.18.0.1</span></pre>
+</div>
+
+<div class="note">
+  <span class="lbl">Why the password is set before the first start</span>
+  Postgres initialises its cluster with <code>POSTGRES_PASSWORD</code> on first boot only — later edits to
+  <code>.env</code> do not change it. Generating it here and reusing the same value in step 07 keeps the
+  database and <code>DATABASE_URL</code> in agreement without an <code>ALTER USER</code> afterwards.
+</div>
+
+<h2><span class="num">07</span>Write <code>.env</code></h2>
+<p>Generate the two secrets, then fill in the file. Everything below is required unless marked optional.</p>
+
+<pre>openssl rand -hex 32   <span class="c"># APP_SECRET_KEY</span>
+openssl rand -hex 32   <span class="c"># EVIDENCE_ENCRYPTION_KEY</span>
+<span class="c"># the database password is the one step 06 generated and printed</span></pre>
+
+<pre>nano /opt/sentriq/.env</pre>
+
+<pre>APP_ENV=production
+COOKIE_SECURE=1
+ALLOWED_HOSTS=sentriq.example.com
+PUBLIC_BASE_URL=https://sentriq.example.com
+
+APP_SECRET_KEY=<span class="c">&lt;openssl rand -hex 32&gt;</span>
+EVIDENCE_ENCRYPTION_KEY=<span class="c">&lt;openssl rand -hex 32&gt;</span>
+
+POSTGRES_PASSWORD=<span class="c">&lt;the password printed in step 06&gt;</span>
+DATABASE_URL=postgresql://sentriq:<span class="c">&lt;same password&gt;</span>@postgres:5432/sentriq
+
+TRUSTED_PROXIES=<span class="c">&lt;gateway from step 06&gt;</span>/32
+WEB_CONCURRENCY=1</pre>
+
+<div class="warnbox">
+  <span class="lbl">Two values you must not get wrong</span>
+  <b>TRUSTED_PROXIES</b> is the single address the proxy connects from — the gateway, with <code>/32</code>.
+  A range like <code>172.16.0.0/12</code> lets any container claim any client IP, which defeats the rate
+  limits and poisons the audit trail. <b>ALLOWED_HOSTS</b> is the domain only; adding
+  <code>localhost</code> or an IP widens the Host allow-list for no benefit.
+</div>
+
+<div class="note">
+  <span class="lbl">Keep a copy of EVIDENCE_ENCRYPTION_KEY</span>
+  It is not derivable. Lose it and every encrypted evidence file on the host is unrecoverable, including
+  the ones inside your backups. Put it in your password manager or secrets store now, not later.
+</div>
+
+<h2><span class="num">08</span>Pin the database timezone</h2>
+<p>Sentriq stores timestamps as UTC in <code>timestamp without time zone</code> columns. That is correct
+only while the database session timezone is UTC — true on a default droplet, not guaranteed on a
+corporate cluster or a host with <code>TZ</code> set. Make it a guarantee with an override file, which
+also puts a ceiling on memory:</p>
+
+<pre>nano /opt/sentriq/docker-compose.override.yml</pre>
+
+<pre>services:
+  postgres:
+    command: ["postgres", "-c", "timezone=UTC", "-c", "log_timezone=UTC"]
+    mem_limit: 384m
+  sentriq:
+    mem_limit: 384m
+  retention:
+    mem_limit: 96m</pre>
+
+<div class="note">
+  <span class="lbl">Why an override file</span>
+  <code>docker-compose.override.yml</code> is merged automatically and stays untracked, so pulling a new
+  release never conflicts with your host settings. Memory limits matter because without them the kernel
+  OOM killer chooses which container dies — and it often chooses Postgres.
+</div>
+
+<h2><span class="num">09</span>Start the stack</h2>
+<pre>cd /opt/sentriq
+docker compose up -d
+docker compose ps</pre>
+
+<div class="verify">
+  <span class="lbl">Check — all three services up, the app healthy</span>
+  <pre>sentriq-postgres-1    Up (healthy)
+sentriq-retention-1   Up
+sentriq-sentriq-1     Up (healthy)   127.0.0.1:8080-&gt;8080/tcp</pre>
+</div>
+
+<p>If a container is <code>Restarting (1)</code>, the app is refusing to start and the reason is in the log —
+the config guards name the fix:</p>
+
+<pre>docker compose logs --tail=40 sentriq</pre>
+
+<div class="note">
+  <span class="lbl">If you changed the password after Postgres first started</span>
+  The cluster keeps the password it was initialised with. Either restore the value from step 06 in both
+  places, or set it inside the database and recreate the app:
+  <pre style="margin-top:10px">docker compose exec -T postgres psql -U sentriq -d sentriq \
+  -c "ALTER USER sentriq WITH PASSWORD '&lt;the password in .env&gt;';"
+docker compose up -d --force-recreate sentriq retention</pre>
+</div>
+
+<h2><span class="num">10</span>Put nginx in front of it</h2>
+<p>Replace the ACME-only site with the real one. Note the <code>listen 443 ssl http2</code> form — that is
+the syntax for nginx 1.24, which is what Ubuntu 24.04 ships. On nginx 1.25.1 or newer, use
+<code>listen 443 ssl;</code> plus <code>http2 on;</code> instead.</p>
+
+<pre>sudo tee /etc/nginx/sites-available/sentriq &gt;/dev/null &lt;&lt;'EOF'
+limit_req_zone $binary_remote_addr zone=sentriq_login:10m rate=10r/m;
+
+upstream sentriq_app {
+    server 127.0.0.1:8080;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sentriq.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name sentriq.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/sentriq.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sentriq.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    client_max_body_size 25m;      # keep in step with MAX_REQUEST_BYTES
+    client_body_timeout 60s;
+
+    server_tokens off;
+    proxy_hide_header Server;
+    proxy_hide_header X-Powered-By;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location = /login/ {
+        limit_req zone=sentriq_login burst=10 nodelay;
+        proxy_pass http://sentriq_app;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location / {
+        proxy_pass http://sentriq_app;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+EOF
+
+sudo nginx -t &amp;&amp; sudo systemctl reload nginx</pre>
+
+<div class="note">
+  <span class="lbl">The one header people forget</span>
+  <code>X-Forwarded-Proto https</code> is what stops the app building <code>http://</code> asset URLs on an
+  <code>https://</code> page. Omit it and the login page loads unstyled with the CSS and JS blocked as mixed
+  content — which looks like a broken app, not a proxy bug.
+</div>
+
+<h2><span class="num">11</span>Create the first administrator</h2>
+<pre>cd /opt/sentriq
+docker compose exec -T sentriq python -m sentriq.manage create-admin admin_l3</pre>
+
+<p>It prompts twice and enforces complexity. Then sign in at <code>https://sentriq.example.com/</code>.</p>
+
+<div class="warnbox">
+  <span class="lbl">Exactly one administrator</span>
+  Create one. If you need a second, create it in <b>Administration → Users</b> and deactivate any setup
+  account you are not using — <code>is_admin</code> accounts are the whole blast radius. Deactivation keeps
+  attribution on old tickets; deletion is refused by design once an account has touched a ticket.
+</div>
+
+<h2><span class="num">12</span>Prove it works — eleven checks</h2>
+<p class="lede">Run these before you tell anyone the system is up. Each one fails loudly if the thing it
+tests is broken.</p>
+
+<h3>From the host</h3>
+<pre><span class="c"># 1. liveness, including backup freshness</span>
+curl -fsS http://127.0.0.1:8080/healthz
+<span class="c"># {"status":"ok","database":"ok","backup":{"age_hours":0.0,"stale":false}}</span>
+
+<span class="c"># 2. the database is really on UTC</span>
+docker compose exec -T postgres psql -U sentriq -d sentriq -tAc "show timezone"
+<span class="c"># UTC</span>
+
+<span class="c"># 3. migrations reached the head revision</span>
+docker compose exec -T postgres psql -U sentriq -d sentriq -tAc "select version_num from alembic_version"
+<span class="c"># 0011_audit_append_only</span>
+
+<span class="c"># 4. the container is not running as root</span>
+docker compose exec -T sentriq id
+<span class="c"># uid=100(app) gid=101(app)</span>
+
+<span class="c"># 5. through the proxy, with the certificate</span>
+curl -fsS https://sentriq.example.com/healthz
+
+<span class="c"># 6. the app port is not published on the LAN interface</span>
+ss -tlnp | grep 8080
+<span class="c"># 127.0.0.1:8080  (not 0.0.0.0)</span></pre>
+
+<h3>From another machine</h3>
+<pre><span class="c"># 7. only 22/80/443 answer; 8080 and 5432 must not</span>
+for p in 22 80 443 8080 5432; do
+  timeout 3 bash -c "&lt;/dev/tcp/sentriq.example.com/$p" 2&gt;/dev/null \
+    &amp;&amp; echo "$p open" || echo "$p closed"
+done
+
+<span class="c"># 8. http redirects, https answers</span>
+curl -sI http://sentriq.example.com/ | head -3
+<span class="c"># HTTP/1.1 301  Location: https://sentriq.example.com/</span>
+
+<span class="c"># 9. the certificate is trusted, not self-signed</span>
+curl -sS https://sentriq.example.com/ -o /dev/null -w '%{http_code}\n'
+<span class="c"># 303 — no -k flag, so a bad certificate would have failed here</span></pre>
+
+<h3>In the browser</h3>
+<ul class="plain">
+  <li><b>No certificate warning.</b> <span>The padlock is real, not clicked through.</span></li>
+  <li><b>Sign in and load a page with the CSS intact.</b> <span>Unstyled means X-Forwarded-Proto is missing.</span></li>
+  <li><b>Create a ticket with a small attachment, download it again, and open the audit log.</b>
+      <span>That exercises upload, hash check, download audit row and the timeline in one pass.</span></li>
+</ul>
+
+<h2><span class="num">13</span>Backups: schedule, verify, alert</h2>
+<p>The container snapshots the database on every start. That is not a backup schedule — a host that runs
+for a month would have one month-old dump. Add both cron jobs.</p>
+
+<pre>sudo -iu sentriq crontab -e</pre>
+
+<pre><span class="c"># daily snapshot, keep 30, no minimum interval</span>
+0 2 * * * cd /opt/sentriq &amp;&amp; docker compose exec -T sentriq sh scripts/backup-postgres.sh /app/backups 30 0 &gt;&gt; /var/log/sentriq-backup.log 2&gt;&amp;1
+
+<span class="c"># weekly restore drill: restores the newest dump into a throwaway database and compares row counts</span>
+30 3 * * 0 cd /opt/sentriq &amp;&amp; docker compose exec -T sentriq sh scripts/verify-restore.sh /app/backups &gt;&gt; /var/log/sentriq-restore.log 2&gt;&amp;1
+
+<span class="c"># every 30 min: shout if the newest snapshot is stale</span>
+*/30 * * * * curl -fsS http://127.0.0.1:8080/healthz | python3 -c 'import json,sys; sys.exit(1 if json.load(sys.stdin)["backup"]["stale"] else 0)' || logger -t sentriq "BACKUP STALE"</pre>
+
+<pre><span class="c"># keep the two logs from growing without limit</span>
+sudo tee /etc/logrotate.d/sentriq &gt;/dev/null &lt;&lt;'EOF'
+/var/log/sentriq-*.log {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+}
+EOF</pre>
+
+<div class="verify">
+  <span class="lbl">Check — run both jobs by hand once, now, not tomorrow</span>
+  <pre>cd /opt/sentriq
+docker compose exec -T sentriq sh scripts/backup-postgres.sh /app/backups 30 0
+docker compose exec -T sentriq sh scripts/verify-restore.sh /app/backups
+docker compose exec -T sentriq python -m sentriq.manage backup-status
+<span class="c"># newest snapshot, age in hours, stale: false</span></pre>
+</div>
+
+<div class="warnbox">
+  <span class="lbl">A degraded health check still returns 200</span>
+  <code>/healthz</code> reports <code>"stale": true</code> after <code>BACKUP_MAX_AGE_HOURS</code> (36 by
+  default) but keeps answering HTTP 200 — so the compose healthcheck keeps saying <em>healthy</em>. That is
+  why the alert on <code>backup.stale</code> above is not optional. Point its non-zero exit at whatever
+  already pages you.
+</div>
+
+<div class="danger warnbox">
+  <span class="lbl">Back up the secrets separately</span>
+  <code>.env</code> holds <code>APP_SECRET_KEY</code>, <code>EVIDENCE_ENCRYPTION_KEY</code> and the database
+  password. Without the evidence key, an encrypted evidence file is unrecoverable even from a good dump.
+  Store a copy outside this host — and do not leave <code>.env.bak.*</code> files in the checkout, where one
+  <code>git add -A</code> publishes them.
+</div>
+
+<h2><span class="num">14</span>Retention and the audit export</h2>
+<p>The <code>retention</code> service archives and removes closed tickets older than
+<code>RETENTION_DAYS</code> (730 by default), in bounded batches, once at start and then every 24 hours.
+Nothing needs scheduling.</p>
+
+<pre><span class="c"># dry run: shows what would be archived, writes and deletes nothing</span>
+docker compose exec -T sentriq python -m sentriq.manage retention
+
+<span class="c"># pause or resume the job</span>
+docker compose stop retention
+docker compose start retention
+
+<span class="c"># hash-chained audit export, pushed somewhere this host cannot rewrite</span>
+docker compose exec -T sentriq python -m sentriq.manage audit-export --push --to-dir /app/backups/anchor
+docker compose exec -T sentriq python -m sentriq.manage audit-verify /app/data/audit-exports/&lt;file&gt;</pre>
+
+<div class="note">
+  <span class="lbl">The append-only guard</span>
+  <code>python -m sentriq.manage audit-guard</code> reports whether the audit table is protected against
+  UPDATE and DELETE by a trigger and by role privileges. Run it once after install; if it says the
+  application role can still rewrite the trail, apply <code>--app-role</code> as the table owner.
+</div>
+
+<h2><span class="num">15</span>Updating, and rolling back</h2>
+
+<h3>Pull a published image (preferred)</h3>
+<pre>cd /opt/sentriq
+sed -i 's|^# SENTRIQ_IMAGE=.*|SENTRIQ_IMAGE=registry.example.com/sentriq:1.4.4|' .env
+docker compose pull
+docker compose up -d --no-build
+docker compose logs --tail=40 sentriq</pre>
+
+<h3>Build on the host (when there is no registry yet)</h3>
+<pre>cd /opt/sentriq
+git fetch --tags &amp;&amp; git checkout v1.4.4
+docker compose build
+docker compose up -d
+docker compose logs --tail=40 sentriq</pre>
+
+<div class="warnbox">
+  <span class="lbl">Rollback is not symmetric</span>
+  Migrations are forward-only. Going back to an older image after a migration ran needs the database
+  restored to the matching snapshot — take one immediately before every upgrade
+  (<code>backup-postgres.sh</code>) and keep it until the new version has been signed off. Rolling back the
+  image alone will start, and then fail on a schema it does not know.
+</div>
+
+<h2><span class="num">16</span>Troubleshooting</h2>
+<div class="tablewrap">
+<table>
+  <tr><th style="width:34%">Symptom</th><th>Cause and fix</th></tr>
+  <tr><td class="k">Container <code>Restarting (1)</code></td><td>A config guard refused to start. <code>docker compose logs sentriq</code> names it: placeholder <code>APP_SECRET_KEY</code>, <code>COOKIE_SECURE=0</code> in production, missing <code>ALLOWED_HOSTS</code> or <code>TRUSTED_PROXIES</code>, or several workers without <code>REDIS_URL</code>.</td></tr>
+  <tr><td class="k"><code>400 Bad Request</code></td><td>The Host header is not in <code>ALLOWED_HOSTS</code>. Add the domain you are actually using, then <code>docker compose up -d --force-recreate sentriq</code>.</td></tr>
+  <tr><td class="k">Login page unstyled, CSS/JS blocked</td><td><code>X-Forwarded-Proto https</code> is missing at the proxy, or <code>TRUSTED_PROXIES</code> does not include the gateway, so the app builds <code>http://</code> asset URLs. Fix the header, recreate, hard-refresh.</td></tr>
+  <tr><td class="k"><code>502 Bad Gateway</code> from nginx</td><td>The app is not healthy. <code>docker compose ps</code>, then <code>docker compose logs sentriq</code>. nginx is fine; the container is not.</td></tr>
+  <tr><td class="k"><code>PermissionError: /app/data/evidence</code></td><td>The bind mounts are not writable by uid 100. <code>sudo chown -R 100:101 data backups</code>.</td></tr>
+  <tr><td class="k"><code>pg_dump ... Permission denied</code></td><td>Same ownership fix, on <code>backups/</code>.</td></tr>
+  <tr><td class="k">Everyone is rate-limited at once</td><td><code>TRUSTED_PROXIES</code> is wrong, so every request looks like it came from one address. Set it to the single gateway address and recreate.</td></tr>
+  <tr><td class="k">Certificate renewal fails</td><td>The ACME location block is missing from the port-80 server, or <code>/var/www/certbot</code> is not readable by nginx. <code>sudo certbot renew --dry-run</code> proves it.</td></tr>
+  <tr><td class="k">Timestamps look shifted</td><td>The database session timezone is not UTC. Check <code>show timezone</code>; apply the override from step 08 and recreate Postgres.</td></tr>
+</table>
+</div>
+
+<h2><span class="num">17</span>What "done" looks like</h2>
+<ul class="check">
+  <li>SSH is key-only; <code>PermitRootLogin no</code> and <code>PasswordAuthentication no</code> verified with <code>sshd -T</code></li>
+  <li>ufw active with only 22/80/443; fail2ban running on sshd</li>
+  <li>Domain resolves, certificate is trusted in a browser with no warning, renewal timer scheduled</li>
+  <li><code>/healthz</code> returns <code>ok</code> through nginx, and <code>show timezone</code> returns UTC</li>
+  <li>Ports 8080 and 5432 do not answer from outside the host</li>
+  <li>Exactly one active administrator; the setup password has been replaced</li>
+  <li>Daily backup cron installed, and a restore has been run by hand once</li>
+  <li>An alert fires when <code>backup.stale</code> becomes true</li>
+  <li><code>.env</code> is mode 600, its two keys are stored off-host, and no <code>.env.bak</code> copies exist in the checkout</li>
+  <li>The running image is a tagged, scanned build — not a working-tree build of <code>main</code></li>
+</ul>
+
+<h2><span class="num">A</span>Appendix — <code>.env</code> reference</h2>
+<div class="tablewrap">
+<table>
+  <tr><th style="width:30%">Variable</th><th style="width:14%">Required</th><th>Notes</th></tr>
+  <tr><td class="k mono">APP_ENV</td><td>yes</td><td><code>production</code>. Any other value turns the guards off.</td></tr>
+  <tr><td class="k mono">COOKIE_SECURE</td><td>yes</td><td><code>1</code> in production; requires HTTPS.</td></tr>
+  <tr><td class="k mono">ALLOWED_HOSTS</td><td>yes</td><td>The domain(s). Everything else is refused with 400.</td></tr>
+  <tr><td class="k mono">APP_SECRET_KEY</td><td>yes</td><td>64 hex chars. Changing it invalidates every session.</td></tr>
+  <tr><td class="k mono">DATABASE_URL</td><td>yes</td><td>Postgres only. Must match <code>POSTGRES_PASSWORD</code>.</td></tr>
+  <tr><td class="k mono">POSTGRES_PASSWORD</td><td>yes</td><td>Compose refuses to start without it.</td></tr>
+  <tr><td class="k mono">TRUSTED_PROXIES</td><td>yes</td><td>The proxy's single address, with <code>/32</code>.</td></tr>
+  <tr><td class="k mono">PUBLIC_BASE_URL</td><td>rec.</td><td>Used in notification links.</td></tr>
+  <tr><td class="k mono">EVIDENCE_ENCRYPTION_KEY</td><td>rec.</td><td>AES-256-GCM at rest. Unrecoverable if lost.</td></tr>
+  <tr><td class="k mono">WEB_CONCURRENCY</td><td>no</td><td>Keep 1 without Redis; N workers multiply every limit by N.</td></tr>
+  <tr><td class="k mono">REDIS_URL</td><td>no</td><td>Shared rate-limit and lockout counters; required if workers &gt; 1.</td></tr>
+  <tr><td class="k mono">SESSION_TTL_SECONDS / SESSION_IDLE_SECONDS</td><td>no</td><td>Defaults 28800 / 1800.</td></tr>
+  <tr><td class="k mono">RATE_LIMIT_REQUESTS / WINDOW</td><td>no</td><td>Defaults 120 per 60 s, per client, per worker.</td></tr>
+  <tr><td class="k mono">LOGIN_LOCKOUT_THRESHOLD</td><td>no</td><td>Defaults 5 per address+username, 300 s.</td></tr>
+  <tr><td class="k mono">RETENTION_DAYS</td><td>no</td><td>Defaults 730 from closure.</td></tr>
+  <tr><td class="k mono">BACKUP_MAX_AGE_HOURS</td><td>no</td><td>Defaults 36; drives <code>backup.stale</code>.</td></tr>
+  <tr><td class="k mono">METRICS_TOKEN</td><td>no</td><td>Unset means <code>/metrics</code> answers on loopback only.</td></tr>
+  <tr><td class="k mono">DISPLAY_TIMEZONE</td><td>no</td><td>Rendering zone, default <code>Asia/Yangon</code>. Storage is always UTC.</td></tr>
+  <tr><td class="k mono">EVIDENCE_SCAN_COMMAND</td><td>no</td><td>e.g. <code>clamdscan --no-summary --stdout {}</code>; add <code>_REQUIRED=1</code> to block unscanned uploads.</td></tr>
+  <tr><td class="k mono">AUDIT_OFFHOST_DIR</td><td>no</td><td>Where <code>audit-export --push</code> sends the anchor.</td></tr>
+  <tr><td class="k mono">SMTP_* / NOTIFY_TEAMS_WEBHOOK</td><td>no</td><td>Each channel stays inert until configured.</td></tr>
+</table>
+</div>
+
+<h2><span class="num">B</span>Appendix — what lives where</h2>
+<div class="tablewrap">
+<table>
+  <tr><th style="width:38%">Path</th><th>Contents</th></tr>
+  <tr><td class="k mono">/opt/sentriq/.env</td><td>Secrets and runtime config, mode 600. Back it up separately.</td></tr>
+  <tr><td class="k mono">/opt/sentriq/data/</td><td>Uploaded evidence. Owned by 100:101.</td></tr>
+  <tr><td class="k mono">/opt/sentriq/backups/</td><td><code>pg_dump</code> snapshots, newest 30 kept.</td></tr>
+  <tr><td class="k mono">/opt/sentriq/pgdata/</td><td>Postgres cluster. Owned by uid 70 — leave the ownership alone.</td></tr>
+  <tr><td class="k mono">/etc/nginx/sites-available/sentriq</td><td>Reverse-proxy site.</td></tr>
+  <tr><td class="k mono">/etc/letsencrypt/live/&lt;domain&gt;/</td><td>Certificate and key, renewed by the certbot timer.</td></tr>
+  <tr><td class="k mono">/var/log/sentriq-*.log</td><td>Backup and restore-drill output, rotated weekly.</td></tr>
+</table>
+</div>
+
+<footer>
+  <p>Commands assume Ubuntu 24.04, Docker Compose v2 and nginx 1.24. Replace
+  <code>sentriq.example.com</code>, <code>YOUR_SERVER_IP</code> and <code>soc@example.com</code> before
+  running anything. Every "Check" block is the command that proves the step worked — if it does not print
+  what is shown, stop there rather than continuing.</p>
+</footer>
+
+</div>
+</body>
+</html>
