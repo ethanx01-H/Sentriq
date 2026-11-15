@@ -16,6 +16,11 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-1}
       # The domain this is served on; every other Host header is refused.
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS in .env to the domain, e.g. sentriq.example.com}
+      # Uvicorn trusts X-Forwarded-Proto only from these peers. Behind the host
+      # proxy the connection arrives from the Docker gateway, not 127.0.0.1, so
+      # without this the app builds http:// asset URLs on an https:// page and
+      # the browser blocks the CSS and JS as mixed content.
+      FORWARDED_ALLOW_IPS: ${TRUSTED_PROXIES:-127.0.0.1}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       # One worker unless a shared store is configured: N workers without Redis
       # multiply every rate limit by N, and a lockout only covers the worker
