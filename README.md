@@ -117,8 +117,8 @@ The app is designed to sit behind a reverse proxy on a name, not on an IP. In a
 bank network an IP address is neither stable nor verifiable, and a bare IP cannot
 carry a certificate a browser will trust.
 
-1. **DNS**: point a name at the host, e.g. `sentriq.aya.com.mm`.
-2. **Certificate**: `certbot --nginx -d sentriq.aya.com.mm`, or install the bank's
+1. **DNS**: point a name at the host, e.g. `sentriq.example.com`.
+2. **Certificate**: `certbot --nginx -d sentriq.example.com`, or install the bank's
    internal CA certificate.
 3. **Proxy**: start from [nginx.conf](nginx.conf). It redirects HTTP to HTTPS,
    forwards `Host`, `X-Forwarded-For`, `X-Real-IP` and `X-Forwarded-Proto`, hides
@@ -128,8 +128,8 @@ carry a certificate a browser will trust.
    ```
    APP_ENV=production
    COOKIE_SECURE=1
-   ALLOWED_HOSTS=sentriq.aya.com.mm
-   PUBLIC_BASE_URL=https://sentriq.aya.com.mm
+   ALLOWED_HOSTS=sentriq.example.com
+   PUBLIC_BASE_URL=https://sentriq.example.com
    ```
 
 5. **Keep the app off the network.** Compose binds it to `127.0.0.1:8080`, so only
@@ -327,7 +327,7 @@ database, so a patch does not depend on PyPI or Docker Hub being reachable from 
 
 ```bash
 # .env on the host, once
-SENTRIQ_IMAGE=registry.aya.com.mm/sentriq:1.4.3
+SENTRIQ_IMAGE=registry.example.com/sentriq:1.4.3
 ```
 
 ```bash

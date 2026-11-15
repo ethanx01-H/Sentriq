@@ -102,7 +102,7 @@ if not ALLOWED_HOSTS:
     if APP_ENV == "production":
         raise RuntimeError(
             "ALLOWED_HOSTS is required in production: set it to the domain this "
-            "app is served on, e.g. ALLOWED_HOSTS=sentriq.aya.com.mm"
+            "app is served on, e.g. ALLOWED_HOSTS=sentriq.example.com"
         )
     ALLOWED_HOSTS = ("localhost", "127.0.0.1", "testserver")
 RATE_LIMIT_REQUESTS = int(os.environ.get("RATE_LIMIT_REQUESTS", "120"))

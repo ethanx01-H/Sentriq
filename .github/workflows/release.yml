@@ -6,7 +6,7 @@ name: Release
 # a database server.
 #
 # Set the repository variable SENTRIQ_IMAGE to the published name without a tag
-# (e.g. registry.aya.com.mm/sentriq). It defaults to ghcr.io/<owner>/<repo>.
+# (e.g. registry.example.com/sentriq). It defaults to ghcr.io/<owner>/<repo>.
 # For a registry other than ghcr.io, set the secrets REGISTRY_USERNAME and
 # REGISTRY_PASSWORD; ghcr.io uses the workflow's own token.
 

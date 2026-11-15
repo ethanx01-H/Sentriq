@@ -2,7 +2,7 @@ services:
   sentriq:
     build: .
     # Overridable so production can run a published image instead of a local
-    # build: SENTRIQ_IMAGE=registry.aya.com.mm/sentriq:1.4.3 docker compose pull
+    # build: SENTRIQ_IMAGE=registry.example.com/sentriq:1.4.3 docker compose pull
     # followed by `up -d --no-build`. Without it, a local build keeps working.
     image: ${SENTRIQ_IMAGE:-sentriq:local}
     env_file: .env
@@ -15,7 +15,7 @@ services:
       APP_ENV: ${APP_ENV:-production}
       COOKIE_SECURE: ${COOKIE_SECURE:-1}
       # The domain this is served on; every other Host header is refused.
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS in .env to the domain, e.g. sentriq.aya.com.mm}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS in .env to the domain, e.g. sentriq.example.com}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       # One worker unless a shared store is configured: N workers without Redis
       # multiply every rate limit by N, and a lockout only covers the worker
