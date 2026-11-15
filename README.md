@@ -91,6 +91,16 @@ closed tickets older than `RETENTION_DAYS` (730 by default). If you are not read
 to enforce that window, `docker compose stop retention` until you are. See
 [Data storage and retention](#data-storage-and-retention).
 
+There are no default accounts, and the image never creates one. Once the stack is
+up, create the first administrator:
+
+```bash
+docker compose exec sentriq python -m sentriq.manage create-admin admin_l3
+```
+
+The command prompts for the password twice. Create L1/L2 users from the
+administrator page afterwards.
+
 To try it on this machine first, over plain HTTP, use the review values instead:
 
 ```bash
@@ -132,7 +142,18 @@ carry a certificate a browser will trust.
    PUBLIC_BASE_URL=https://sentriq.example.com
    ```
 
-5. **Keep the app off the network.** Compose binds it to `127.0.0.1:8080`, so only
+5. **First administrator.** A fresh install has no users. Start the stack and
+   create the first administrator once:
+
+   ```bash
+   docker compose up -d
+   docker compose exec sentriq python -m sentriq.manage create-admin admin_l3
+   ```
+
+   The command prompts for the password twice. Create L1/L2 users from the
+   administrator page afterwards.
+
+6. **Keep the app off the network.** Compose binds it to `127.0.0.1:8080`, so only
    the proxy on that host can reach it. Do not publish 8080 on the LAN, and do not
    put the app port in a load-balancer pool that bypasses the proxy.
 
